@@ -40,7 +40,7 @@ if ffmpeg_binaries:
 
 OPTIONS = {
     'argv_emulation': True,
-    'iconfile': None,  # Add icon path here: 'resources/icon.icns'
+    'iconfile': 'resources/icon.icns',
     'plist': {
         'CFBundleName': 'Whisper Transcriber',
         'CFBundleDisplayName': 'Whisper Transcriber',

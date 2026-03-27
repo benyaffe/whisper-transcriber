@@ -29,25 +29,26 @@ else
     echo "⚠ Warning: FFmpeg not bundled. Recipients will need FFmpeg installed."
 fi
 
-# Create DMG with Applications shortcut
+# Create styled DMG with Applications shortcut and background
 echo "Creating DMG..."
 DMG_NAME="WhisperTranscriber-1.0.0.dmg"
 
-# Create staging folder with app and Applications alias
-mkdir -p dmg_staging
-cp -R "dist/Whisper Transcriber.app" dmg_staging/
-ln -s /Applications dmg_staging/Applications
+# Remove old DMG if exists
+rm -f "$DMG_NAME"
 
-# Create the DMG
-hdiutil create \
-    -volname "Whisper Transcriber" \
-    -srcfolder dmg_staging \
-    -ov \
-    -format UDZO \
-    "$DMG_NAME"
-
-# Clean up staging folder
-rm -rf dmg_staging
+# Use create-dmg for professional installer look
+create-dmg \
+    --volname "Whisper Transcriber" \
+    --volicon "resources/icon.icns" \
+    --background "resources/dmg_background.png" \
+    --window-pos 200 120 \
+    --window-size 660 400 \
+    --icon-size 100 \
+    --icon "Whisper Transcriber.app" 150 220 \
+    --hide-extension "Whisper Transcriber.app" \
+    --app-drop-link 510 220 \
+    "$DMG_NAME" \
+    "dist/Whisper Transcriber.app"
 
 echo ""
 echo "=== Build Complete ==="
