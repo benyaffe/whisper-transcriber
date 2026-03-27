@@ -577,17 +577,32 @@ class MainWindow(QMainWindow):
         else:
             self.eta_label.setText("Processing...")
 
+    def _is_scrolled_to_bottom(self) -> bool:
+        """Check if preview is scrolled to bottom (or near it)."""
+        scrollbar = self.preview_text.verticalScrollBar()
+        # Consider "at bottom" if within 20px of max
+        return scrollbar.value() >= scrollbar.maximum() - 20
+
+    def _auto_scroll_if_at_bottom(self):
+        """Only scroll to bottom if user hasn't scrolled up to read."""
+        if self._is_scrolled_to_bottom():
+            scrollbar = self.preview_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
     def on_text_chunk(self, text: str):
         """Handle status messages."""
+        was_at_bottom = self._is_scrolled_to_bottom()
         if text.startswith('['):
             self.preview_text.append(f"<i style='color: #666;'>{text}</i>")
         else:
             self.preview_text.insertPlainText(text)
-        scrollbar = self.preview_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        if was_at_bottom:
+            self._auto_scroll_if_at_bottom()
 
     def on_segment_ready(self, start: float, end: float, text: str, speaker: str):
         """Handle a new transcribed segment with timestamp."""
+        was_at_bottom = self._is_scrolled_to_bottom()
+
         # Format timestamp
         mins = int(start // 60)
         secs = int(start % 60)
@@ -597,9 +612,9 @@ class MainWindow(QMainWindow):
         html = f"<a href='ts://{start}' style='color: #2962ff;'>[{ts_display}]</a> {text} "
         self.preview_text.append(html)
 
-        # Auto-scroll
-        scrollbar = self.preview_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Only auto-scroll if user was at bottom
+        if was_at_bottom:
+            self._auto_scroll_if_at_bottom()
 
         # Check for search match
         self._check_search_match(text)
