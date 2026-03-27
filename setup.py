@@ -8,10 +8,31 @@ For development testing:
     python setup.py py2app -A
 """
 
+import os
+import shutil
 from setuptools import setup
 
 APP = ['main.py']
+
+# Find FFmpeg binaries to bundle
+def get_ffmpeg_paths():
+    """Locate ffmpeg and ffprobe binaries."""
+    paths = []
+    for binary in ['ffmpeg', 'ffprobe']:
+        # Check common locations
+        for loc in ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']:
+            path = os.path.join(loc, binary)
+            if os.path.exists(path):
+                paths.append(path)
+                break
+    return paths
+
+ffmpeg_binaries = get_ffmpeg_paths()
+
+# Bundle FFmpeg in Resources/bin/
 DATA_FILES = []
+if ffmpeg_binaries:
+    DATA_FILES.append(('bin', ffmpeg_binaries))
 
 OPTIONS = {
     'argv_emulation': True,
@@ -45,6 +66,12 @@ OPTIONS = {
         'faster_whisper',
         'yt_dlp',
         'PyQt6',
+        'ctranslate2',
+        'huggingface_hub',
+        'tokenizers',
+        'av',
+        'numpy',
+        'onnxruntime',
     ],
     'includes': [
         'src',
@@ -57,7 +84,11 @@ OPTIONS = {
         'matplotlib',
         'scipy',
         'PIL',
+        'pytest',
+        'IPython',
+        'jupyter',
     ],
+    'frameworks': [],
 }
 
 setup(

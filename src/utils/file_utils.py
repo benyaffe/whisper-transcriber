@@ -6,6 +6,25 @@ import os
 import re
 import subprocess
 import json
+import sys
+
+
+def get_bundled_binary(name: str) -> str:
+    """
+    Get path to a bundled binary (ffmpeg/ffprobe).
+    Falls back to system PATH if not bundled.
+    """
+    # When running as .app bundle, binaries are in Resources/bin/
+    if getattr(sys, 'frozen', False):
+        # Running as bundled app
+        bundle_dir = os.path.dirname(sys.executable)
+        resources_dir = os.path.abspath(os.path.join(bundle_dir, '..', 'Resources'))
+        bundled_path = os.path.join(resources_dir, 'bin', name)
+        if os.path.exists(bundled_path):
+            return bundled_path
+
+    # Fall back to system binary
+    return name
 
 
 def get_supported_extensions() -> list:
@@ -49,7 +68,7 @@ def get_file_info(filepath: str) -> dict:
     try:
         # Use ffprobe to get file info
         cmd = [
-            'ffprobe',
+            get_bundled_binary('ffprobe'),
             '-v', 'quiet',
             '-print_format', 'json',
             '-show_format',
@@ -113,7 +132,7 @@ def extract_audio(video_path: str, output_path: str = None) -> str:
         output_path = base + '_audio.wav'
 
     cmd = [
-        'ffmpeg',
+        get_bundled_binary('ffmpeg'),
         '-y',  # Overwrite
         '-i', video_path,
         '-vn',  # No video
