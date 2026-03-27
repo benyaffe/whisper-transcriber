@@ -86,6 +86,11 @@ OPTIONS = {
         'av',
         'numpy',
         'onnxruntime',
+        # Speaker diarization
+        'torch',
+        'torchaudio',
+        'pytorch_lightning',
+        'lightning',
     ],
     'includes': [
         'src',
@@ -101,13 +106,13 @@ OPTIONS = {
         'pytest',
         'IPython',
         'jupyter',
-        # Exclude heavy ML packages - diarization runs from source only
+        # pyannote has bundling issues with py2app
         'pyannote',
         'pyannote.audio',
-        'torch',
-        'torchaudio',
-        'lightning',
-        'pytorch_lightning',
+        'pyannote.core',
+        'pyannote.pipeline',
+        'pyannote.database',
+        'pyannote.metrics',
     ],
     'frameworks': [],
 }
