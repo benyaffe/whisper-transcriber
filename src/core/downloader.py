@@ -5,6 +5,7 @@ Video downloader using yt-dlp for YouTube, Instagram, TikTok, etc.
 import os
 import re
 from PyQt6.QtCore import QThread, pyqtSignal
+from src.utils.file_utils import get_bundled_binary
 
 
 class VideoDownloader(QThread):
@@ -30,6 +31,10 @@ class VideoDownloader(QThread):
                 '%(title)s.%(ext)s'
             )
 
+            # Get bundled ffmpeg location for merging video+audio
+            ffmpeg_path = get_bundled_binary('ffmpeg')
+            ffmpeg_dir = os.path.dirname(ffmpeg_path) if os.path.isabs(ffmpeg_path) else None
+
             ydl_opts = {
                 'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'outtmpl': output_template,
@@ -37,6 +42,10 @@ class VideoDownloader(QThread):
                 'quiet': True,
                 'no_warnings': True,
             }
+
+            # Tell yt-dlp where to find ffmpeg
+            if ffmpeg_dir:
+                ydl_opts['ffmpeg_location'] = ffmpeg_dir
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 if self._cancelled:

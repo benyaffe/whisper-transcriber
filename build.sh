@@ -18,6 +18,12 @@ rm -rf build dist *.dmg dmg_staging
 echo "Activating virtual environment..."
 source venv/bin/activate
 
+# Download static ffmpeg if not present
+if [ ! -f "resources/ffmpeg/ffmpeg" ]; then
+    echo "Downloading static ffmpeg binaries..."
+    python scripts/download_ffmpeg.py
+fi
+
 # Build the app
 echo "Building app bundle (this may take a few minutes)..."
 python setup.py py2app

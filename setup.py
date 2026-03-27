@@ -18,20 +18,30 @@ sys.setrecursionlimit(5000)
 
 APP = ['main.py']
 
-# Find FFmpeg binaries to bundle
+# Find FFmpeg binaries to bundle (prefer static builds in resources/)
 def get_ffmpeg_paths():
     """Locate ffmpeg and ffprobe binaries."""
     paths = []
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
     for binary in ['ffmpeg', 'ffprobe']:
-        # Check common locations
+        # First check for static builds in resources/ffmpeg/
+        static_path = os.path.join(script_dir, 'resources', 'ffmpeg', binary)
+        if os.path.exists(static_path):
+            paths.append(static_path)
+            continue
+
+        # Fall back to system binaries
         for loc in ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']:
             path = os.path.join(loc, binary)
             if os.path.exists(path):
                 paths.append(path)
                 break
+
     return paths
 
 ffmpeg_binaries = get_ffmpeg_paths()
+print(f"FFmpeg binaries to bundle: {ffmpeg_binaries}")
 
 # Bundle FFmpeg in Resources/bin/
 DATA_FILES = []
