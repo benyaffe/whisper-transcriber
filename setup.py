@@ -9,8 +9,12 @@ For development testing:
 """
 
 import os
+import sys
 import shutil
 from setuptools import setup
+
+# Fix recursion limit for large packages
+sys.setrecursionlimit(5000)
 
 APP = ['main.py']
 
