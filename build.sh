@@ -1,13 +1,12 @@
 #!/bin/bash
 # Build script for Whisper Transcriber
-# Creates a self-contained .app bundle and DMG with Applications shortcut
+# Creates a self-contained .app bundle and DMG using PyInstaller
 
 set -e
 
 echo "=== Whisper Transcriber Build ==="
 echo ""
 
-# Ensure we're in the project directory
 cd "$(dirname "$0")"
 
 # Clean previous builds
@@ -24,25 +23,22 @@ if [ ! -f "resources/ffmpeg/ffmpeg" ]; then
     python scripts/download_ffmpeg.py
 fi
 
-# Build the app
-echo "Building app bundle (this may take a few minutes)..."
-python setup.py py2app
+# Build with PyInstaller
+echo "Building app bundle with PyInstaller (this may take several minutes)..."
+pyinstaller WhisperTranscriber.spec --noconfirm
 
 # Verify FFmpeg was bundled
-if [ -f "dist/Whisper Transcriber.app/Contents/Resources/bin/ffmpeg" ]; then
+if [ -f "dist/Whisper Transcriber.app/Contents/MacOS/bin/ffmpeg" ]; then
     echo "✓ FFmpeg bundled successfully"
 else
-    echo "⚠ Warning: FFmpeg not bundled. Recipients will need FFmpeg installed."
+    echo "⚠ Warning: FFmpeg may not be bundled correctly"
 fi
 
-# Create styled DMG with Applications shortcut and background
+# Create styled DMG
 echo "Creating DMG..."
 DMG_NAME="WhisperTranscriber-1.0.0.dmg"
-
-# Remove old DMG if exists
 rm -f "$DMG_NAME"
 
-# Use create-dmg for professional installer look
 create-dmg \
     --volname "Whisper Transcriber" \
     --volicon "resources/icon.icns" \
@@ -60,5 +56,4 @@ echo ""
 echo "=== Build Complete ==="
 echo "App: dist/Whisper Transcriber.app"
 echo "DMG: $DMG_NAME"
-echo ""
-echo "To install: Open the DMG and drag the app to Applications."
+ls -lh "$DMG_NAME"
