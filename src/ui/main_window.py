@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QProgressBar,
     QTextEdit, QFileDialog, QMessageBox, QFrame,
-    QListWidget, QListWidgetItem, QSplitter
+    QListWidget, QListWidgetItem, QSplitter, QComboBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
@@ -198,10 +198,54 @@ class MainWindow(QMainWindow):
         self.retry_btn.setEnabled(False)
         queue_controls.addWidget(self.retry_btn)
 
-        self.clear_btn = QPushButton("Clear Done")
+        self.clear_btn = QPushButton("Remove Finished")
+        self.clear_btn.setToolTip("Remove all completed items from the queue list")
         self.clear_btn.clicked.connect(self.clear_completed)
         queue_controls.addWidget(self.clear_btn)
         queue_layout.addLayout(queue_controls)
+
+        # Language selection
+        lang_layout = QHBoxLayout()
+        lang_label = QLabel("Language:")
+        lang_layout.addWidget(lang_label)
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItems([
+            "Auto-detect",
+            "English",
+            "Spanish",
+            "French",
+            "German",
+            "Italian",
+            "Portuguese",
+            "Dutch",
+            "Russian",
+            "Chinese",
+            "Japanese",
+            "Korean",
+            "Arabic",
+            "Hindi",
+            "Turkish",
+            "Polish",
+            "Ukrainian",
+            "Vietnamese",
+            "Thai",
+            "Indonesian",
+            "Malay",
+            "Swedish",
+            "Norwegian",
+            "Danish",
+            "Finnish",
+            "Greek",
+            "Czech",
+            "Romanian",
+            "Hungarian",
+            "Hebrew",
+        ])
+        self.language_combo.setToolTip("Select source language, or Auto-detect to let Whisper determine it")
+        lang_layout.addWidget(self.language_combo)
+        lang_layout.addStretch()
+        queue_layout.addLayout(lang_layout)
 
         splitter.addWidget(queue_widget)
 
@@ -369,7 +413,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.eta_label.setText("Starting...")
 
-        self.transcription_worker = TranscriptionWorker(item.filepath)
+        # Get selected language (None for auto-detect)
+        selected_lang = self.language_combo.currentText()
+        language = None if selected_lang == "Auto-detect" else selected_lang.lower()
+
+        self.transcription_worker = TranscriptionWorker(item.filepath, language=language)
         self.transcription_worker.progress.connect(self.on_transcription_progress)
         self.transcription_worker.text_chunk.connect(self.on_text_chunk)
         self.transcription_worker.language_detected.connect(self.on_language_detected)
@@ -395,18 +443,10 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
 
     def on_language_detected(self, language: str, confidence: float):
-        """Show language detection confirmation."""
-        response = QMessageBox.question(
-            self,
-            "Language Detected",
-            f"Detected language: {language} ({confidence:.0%} confidence)\n\n"
-            "Is this correct?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        """Show detected language in preview (non-blocking)."""
+        self.preview_text.append(
+            f"[Detected language: {language} ({confidence:.0%} confidence)]\n"
         )
-
-        if response == QMessageBox.StandardButton.No:
-            # TODO: Let user select language
-            pass
 
     def on_model_upgraded(self, old_model: str, new_model: str, reason: str):
         """Notify user of automatic model upgrade."""

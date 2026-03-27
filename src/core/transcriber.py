@@ -49,10 +49,23 @@ class TranscriptionWorker(QThread):
     LOW_CONFIDENCE_RATIO_THRESHOLD = 0.25  # More than 25% low confidence = upgrade
     ASSESSMENT_DURATION = 120  # Assess quality after 120 seconds of audio
 
-    def __init__(self, filepath: str, initial_model: str = "medium"):
+    # Language code mapping (display name -> Whisper code)
+    LANGUAGE_CODES = {
+        "english": "en", "spanish": "es", "french": "fr", "german": "de",
+        "italian": "it", "portuguese": "pt", "dutch": "nl", "russian": "ru",
+        "chinese": "zh", "japanese": "ja", "korean": "ko", "arabic": "ar",
+        "hindi": "hi", "turkish": "tr", "polish": "pl", "ukrainian": "uk",
+        "vietnamese": "vi", "thai": "th", "indonesian": "id", "malay": "ms",
+        "swedish": "sv", "norwegian": "no", "danish": "da", "finnish": "fi",
+        "greek": "el", "czech": "cs", "romanian": "ro", "hungarian": "hu",
+        "hebrew": "he",
+    }
+
+    def __init__(self, filepath: str, initial_model: str = "medium", language: Optional[str] = None):
         super().__init__()
         self.filepath = filepath
         self.model_size = initial_model
+        self.language = self.LANGUAGE_CODES.get(language, language) if language else None
         self._cancelled = False
         self.segments: list[TranscriptionSegment] = []
         self.audio_path: Optional[str] = None
@@ -82,12 +95,14 @@ class TranscriptionWorker(QThread):
         total_duration = info.get('duration', 0)
 
         # Step 4: Transcribe
-        self.text_chunk.emit("Starting transcription...\n\n")
+        lang_info = f" (language: {self.language})" if self.language else " (auto-detecting language)"
+        self.text_chunk.emit(f"Starting transcription{lang_info}...\n\n")
         segments_generator, info = model.transcribe(
             self.audio_path,
             beam_size=5,
             word_timestamps=True,
-            vad_filter=True
+            vad_filter=True,
+            language=self.language
         )
 
         # Emit detected language
@@ -157,7 +172,8 @@ class TranscriptionWorker(QThread):
                             self.audio_path,
                             beam_size=5,
                             word_timestamps=True,
-                            vad_filter=True
+                            vad_filter=True,
+                            language=self.language
                         )
                         self.text_chunk.emit("\n\n[Restarting with large model...]\n\n")
                         assessed = True  # Don't re-assess
