@@ -71,7 +71,8 @@ class TranscriptionWorker(QThread):
 
     # Signals
     progress = pyqtSignal(float, int)  # percent, eta_seconds
-    text_chunk = pyqtSignal(str)  # New transcribed text
+    text_chunk = pyqtSignal(str)  # New transcribed text (status messages)
+    segment_ready = pyqtSignal(float, float, str, str)  # start, end, text, speaker - for live clickable preview
     language_detected = pyqtSignal(str, float)  # language, confidence
     model_upgraded = pyqtSignal(str, str, str)  # old_model, new_model, reason
     quality_warning = pyqtSignal(str)  # warning message
@@ -176,7 +177,8 @@ class TranscriptionWorker(QThread):
             )
             self.segments.append(trans_segment)
 
-            self.text_chunk.emit(segment.text.strip() + " ")
+            # Emit segment with timestamp for live clickable preview
+            self.segment_ready.emit(segment.start, segment.end, segment.text.strip(), "")
 
             if total_duration > 0:
                 percent = (segment.end / total_duration) * 100
