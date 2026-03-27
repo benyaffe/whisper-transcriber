@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build script for Whisper Transcriber
-# Creates a self-contained .app bundle and DMG
+# Creates a self-contained .app bundle and DMG with Applications shortcut
 
 set -e
 
@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 
 # Clean previous builds
 echo "Cleaning previous builds..."
-rm -rf build dist *.dmg
+rm -rf build dist *.dmg dmg_staging
 
 # Activate virtual environment
 echo "Activating virtual environment..."
@@ -29,15 +29,25 @@ else
     echo "⚠ Warning: FFmpeg not bundled. Recipients will need FFmpeg installed."
 fi
 
-# Create DMG
+# Create DMG with Applications shortcut
 echo "Creating DMG..."
 DMG_NAME="WhisperTranscriber-1.0.0.dmg"
+
+# Create staging folder with app and Applications alias
+mkdir -p dmg_staging
+cp -R "dist/Whisper Transcriber.app" dmg_staging/
+ln -s /Applications dmg_staging/Applications
+
+# Create the DMG
 hdiutil create \
     -volname "Whisper Transcriber" \
-    -srcfolder "dist/Whisper Transcriber.app" \
+    -srcfolder dmg_staging \
     -ov \
     -format UDZO \
     "$DMG_NAME"
+
+# Clean up staging folder
+rm -rf dmg_staging
 
 echo ""
 echo "=== Build Complete ==="
