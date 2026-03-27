@@ -217,6 +217,17 @@ class MainWindow(QMainWindow):
         lang_layout.addStretch()
         queue_layout.addLayout(lang_layout)
 
+        # Model selection
+        model_layout = QHBoxLayout()
+        model_layout.addWidget(QLabel("Model:"))
+        self.model_combo = QComboBox()
+        self.model_combo.addItems(["tiny", "base", "small", "medium", "large"])
+        self.model_combo.setCurrentText("medium")
+        self.model_combo.setToolTip("Starting model quality. Auto-upgrades to large if quality is low.")
+        model_layout.addWidget(self.model_combo)
+        model_layout.addStretch()
+        queue_layout.addLayout(model_layout)
+
         splitter.addWidget(queue_widget)
 
         # Preview panel
@@ -304,7 +315,7 @@ class MainWindow(QMainWindow):
         progress_layout.addWidget(self.eta_label)
         status_layout.addLayout(progress_layout)
 
-        self.model_label = QLabel("Model: medium")
+        self.model_label = QLabel("Model: —")
         self.model_label.setStyleSheet("color: #666;")
         status_layout.addWidget(self.model_label)
 
@@ -544,8 +555,9 @@ class MainWindow(QMainWindow):
 
         selected_lang = self.language_combo.currentText()
         language = None if selected_lang == "Auto-detect" else selected_lang.lower()
+        selected_model = self.model_combo.currentText()
 
-        self.transcription_worker = TranscriptionWorker(item.filepath, language=language)
+        self.transcription_worker = TranscriptionWorker(item.filepath, initial_model=selected_model, language=language)
         self.transcription_worker.progress.connect(self.on_transcription_progress)
         self.transcription_worker.text_chunk.connect(self.on_text_chunk)
         self.transcription_worker.segment_ready.connect(self.on_segment_ready)
@@ -596,7 +608,8 @@ class MainWindow(QMainWindow):
         self.preview_text.append(f"<i style='color: #666;'>[Detected: {language} ({confidence:.0%})]</i>")
 
     def on_hardware_info(self, info: str):
-        self.model_label.setText(f"Model: medium | {info}")
+        selected_model = self.model_combo.currentText()
+        self.model_label.setText(f"Model: {selected_model} | {info}")
 
     def on_model_upgraded(self, old_model: str, new_model: str, reason: str):
         self.model_label.setText(f"Model: {new_model} (upgraded)")
