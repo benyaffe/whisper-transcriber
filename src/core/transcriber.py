@@ -36,19 +36,23 @@ def detect_optimal_settings():
     Auto-detect hardware and return optimal device/compute settings.
     Returns (device, compute_type, description)
     """
-    import torch
+    try:
+        import torch
+        has_torch = True
+    except ImportError:
+        has_torch = False
 
     # Check for Apple Silicon
     if platform.system() == "Darwin" and platform.processor() == "arm":
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        if has_torch and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             # Apple Silicon with MPS - use float16 for speed
             return "auto", "float16", "Apple Silicon (Metal)"
         else:
-            return "cpu", "int8", "Apple Silicon (CPU)"
+            # Fallback for bundled app without torch
+            return "auto", "float16", "Apple Silicon"
 
     # Check for CUDA
-    if torch.cuda.is_available():
-        # Get GPU memory to decide compute type
+    if has_torch and torch.cuda.is_available():
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         if gpu_mem >= 8:
             return "cuda", "float16", f"CUDA GPU ({gpu_mem:.0f}GB)"
@@ -257,7 +261,11 @@ class TranscriptionWorker(QThread):
         try:
             from pyannote.audio import Pipeline
             import torch
+        except ImportError:
+            self.text_chunk.emit("[Speaker ID unavailable in bundled app]\n")
+            return
 
+        try:
             # Check for HF token
             hf_token = os.environ.get('HF_TOKEN')
             if not hf_token:

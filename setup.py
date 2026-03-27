@@ -101,6 +101,13 @@ OPTIONS = {
         'pytest',
         'IPython',
         'jupyter',
+        # Exclude heavy ML packages - diarization runs from source only
+        'pyannote',
+        'pyannote.audio',
+        'torch',
+        'torchaudio',
+        'lightning',
+        'pytorch_lightning',
     ],
     'frameworks': [],
 }
