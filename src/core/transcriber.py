@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from utils.file_utils import extract_audio, generate_output_paths, get_file_info
+from src.utils.file_utils import extract_audio, generate_output_paths, get_file_info
 
 
 @dataclass

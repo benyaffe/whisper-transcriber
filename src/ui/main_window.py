@@ -11,9 +11,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 
-from core.transcriber import TranscriptionWorker
-from core.downloader import VideoDownloader
-from utils.file_utils import get_supported_extensions, is_url
+from src.core.transcriber import TranscriptionWorker
+from src.core.downloader import VideoDownloader
+from src.utils.file_utils import get_supported_extensions, is_url
 
 
 class DropZone(QFrame):
@@ -397,7 +397,7 @@ class MainWindow(QMainWindow):
     def start_transcription(self, item: QueueItem):
         """Start transcribing a local file."""
         import os
-        from utils.file_utils import get_file_info
+        from src.utils.file_utils import get_file_info
 
         item.status = "transcribing"
         item.update_display()
@@ -488,7 +488,7 @@ class MainWindow(QMainWindow):
 
     def show_error(self, title: str, message: str):
         """Display error with smart suggestions."""
-        from utils.error_handler import get_error_suggestion
+        from src.utils.error_handler import get_error_suggestion
 
         suggestion = get_error_suggestion(message)
         full_message = f"{message}\n\n{suggestion}" if suggestion else message
