@@ -48,8 +48,8 @@ def detect_optimal_settings():
             # Apple Silicon with MPS - use float16 for speed
             return "auto", "float16", "Apple Silicon (Metal)"
         else:
-            # Fallback for bundled app without torch
-            return "auto", "float16", "Apple Silicon"
+            # Fallback for bundled app without torch - use int8 on CPU
+            return "cpu", "int8", "Apple Silicon (CPU)"
 
     # Check for CUDA
     if has_torch and torch.cuda.is_available():
