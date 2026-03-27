@@ -1,6 +1,11 @@
 # Core transcription
 faster-whisper>=1.0.0
 
+# Speaker diarization
+pyannote.audio>=3.1.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
 # Video downloads
 yt-dlp>=2024.1.0
 
@@ -10,5 +15,4 @@ PyQt6>=6.6.0
 # App bundling
 py2app>=0.28.0
 
-# Audio processing (faster-whisper dependency, but explicit for clarity)
-# ffmpeg must be installed separately via: brew install ffmpeg
+# ffmpeg is bundled (static build downloaded during build)

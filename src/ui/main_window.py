@@ -2,14 +2,17 @@
 Main application window with drag-drop zone, URL input, and transcription controls.
 """
 
+import re
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QProgressBar,
     QTextEdit, QFileDialog, QMessageBox, QFrame,
-    QListWidget, QListWidgetItem, QSplitter, QComboBox
+    QListWidget, QListWidgetItem, QSplitter, QComboBox,
+    QSlider, QTextBrowser
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QTextCursor
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from src.core.transcriber import TranscriptionWorker
 from src.core.downloader import VideoDownloader
@@ -49,7 +52,6 @@ class DropZone(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mousePressEvent(self, event):
-        """Open file dialog on click."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.open_file_dialog()
 
@@ -58,10 +60,7 @@ class DropZone(QFrame):
         filter_str = f"Media Files ({' '.join('*' + ext for ext in extensions)})"
 
         files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Audio/Video Files",
-            "",
-            filter_str
+            self, "Select Audio/Video Files", "", filter_str
         )
 
         if files:
@@ -114,6 +113,7 @@ class QueueItem(QListWidgetItem):
         self.filepath = filepath
         self.is_url = is_url
         self.status = "pending"
+        self.audio_path = None  # For playback
         self.update_display()
 
     def update_display(self):
@@ -131,20 +131,65 @@ class QueueItem(QListWidgetItem):
         self.setText(f"{icon} {name}")
 
 
+class ClickablePreview(QTextBrowser):
+    """Text preview that handles timestamp clicks for audio playback."""
+
+    timestamp_clicked = pyqtSignal(float)  # Emits seconds
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setOpenLinks(False)
+        self.anchorClicked.connect(self._handle_anchor)
+        self.setStyleSheet("""
+            QTextBrowser {
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            }
+            a {
+                color: #2962ff;
+                text-decoration: none;
+            }
+            a:hover {
+                text-decoration: underline;
+            }
+        """)
+
+    def _handle_anchor(self, url: QUrl):
+        """Handle clicks on timestamp links."""
+        scheme = url.scheme()
+        if scheme == "ts":
+            # Parse timestamp: ts://123.456
+            try:
+                seconds = float(url.host())
+                self.timestamp_clicked.emit(seconds)
+            except ValueError:
+                pass
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Whisper Transcriber")
-        self.setMinimumSize(700, 600)
+        self.setMinimumSize(800, 700)
 
         self.transcription_worker = None
         self.downloader = None
         self.queue = []
         self.current_item = None
 
+        # Audio playback
+        self.media_player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.media_player.setAudioOutput(self.audio_output)
+        self.current_audio_path = None
+
         self.setup_ui()
+
+        # Connect player signals
+        self.media_player.positionChanged.connect(self._on_position_changed)
+        self.media_player.durationChanged.connect(self._on_duration_changed)
 
     def setup_ui(self):
         central = QWidget()
@@ -158,7 +203,7 @@ class MainWindow(QMainWindow):
         self.drop_zone.files_dropped.connect(self.queue_files)
         layout.addWidget(self.drop_zone)
 
-        # URL input section
+        # URL input
         url_layout = QHBoxLayout()
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Paste YouTube, Instagram, TikTok URL...")
@@ -170,7 +215,7 @@ class MainWindow(QMainWindow):
         url_layout.addWidget(self.url_button)
         layout.addLayout(url_layout)
 
-        # Splitter for queue and preview
+        # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Queue panel
@@ -211,38 +256,14 @@ class MainWindow(QMainWindow):
 
         self.language_combo = QComboBox()
         self.language_combo.addItems([
-            "Auto-detect",
-            "English",
-            "Spanish",
-            "French",
-            "German",
-            "Italian",
-            "Portuguese",
-            "Dutch",
-            "Russian",
-            "Chinese",
-            "Japanese",
-            "Korean",
-            "Arabic",
-            "Hindi",
-            "Turkish",
-            "Polish",
-            "Ukrainian",
-            "Vietnamese",
-            "Thai",
-            "Indonesian",
-            "Malay",
-            "Swedish",
-            "Norwegian",
-            "Danish",
-            "Finnish",
-            "Greek",
-            "Czech",
-            "Romanian",
-            "Hungarian",
-            "Hebrew",
+            "Auto-detect", "English", "Spanish", "French", "German",
+            "Italian", "Portuguese", "Dutch", "Russian", "Chinese",
+            "Japanese", "Korean", "Arabic", "Hindi", "Turkish",
+            "Polish", "Ukrainian", "Vietnamese", "Thai", "Indonesian",
+            "Malay", "Swedish", "Norwegian", "Danish", "Finnish",
+            "Greek", "Czech", "Romanian", "Hungarian", "Hebrew",
         ])
-        self.language_combo.setToolTip("Select source language, or Auto-detect to let Whisper determine it")
+        self.language_combo.setToolTip("Select source language")
         lang_layout.addWidget(self.language_combo)
         lang_layout.addStretch()
         queue_layout.addLayout(lang_layout)
@@ -254,29 +275,46 @@ class MainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_widget)
         preview_layout.setContentsMargins(0, 0, 0, 0)
 
-        preview_label = QLabel("Live Preview")
+        preview_label = QLabel("Live Preview (click timestamps to play)")
         preview_label.setStyleSheet("font-weight: bold;")
         preview_layout.addWidget(preview_label)
 
-        self.preview_text = QTextEdit()
-        self.preview_text.setReadOnly(True)
-        self.preview_text.setPlaceholderText("Transcription will appear here...")
+        self.preview_text = ClickablePreview()
+        self.preview_text.timestamp_clicked.connect(self._play_from_timestamp)
         preview_layout.addWidget(self.preview_text)
 
+        # Audio player controls
+        player_layout = QHBoxLayout()
+
+        self.play_btn = QPushButton("▶")
+        self.play_btn.setFixedWidth(40)
+        self.play_btn.clicked.connect(self._toggle_playback)
+        self.play_btn.setEnabled(False)
+        player_layout.addWidget(self.play_btn)
+
+        self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setEnabled(False)
+        self.position_slider.sliderMoved.connect(self._seek_position)
+        player_layout.addWidget(self.position_slider)
+
+        self.time_label = QLabel("0:00 / 0:00")
+        self.time_label.setMinimumWidth(100)
+        player_layout.addWidget(self.time_label)
+
+        preview_layout.addLayout(player_layout)
+
         splitter.addWidget(preview_widget)
-        splitter.setSizes([250, 450])
+        splitter.setSizes([250, 550])
 
         layout.addWidget(splitter, 1)
 
         # Status section
         status_layout = QVBoxLayout()
 
-        # File info
         self.file_info_label = QLabel("No file selected")
         self.file_info_label.setStyleSheet("color: #666;")
         status_layout.addWidget(self.file_info_label)
 
-        # Progress bar
         progress_layout = QHBoxLayout()
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -289,7 +327,6 @@ class MainWindow(QMainWindow):
         progress_layout.addWidget(self.eta_label)
         status_layout.addLayout(progress_layout)
 
-        # Model info
         self.model_label = QLabel("Model: medium")
         self.model_label.setStyleSheet("color: #666;")
         status_layout.addWidget(self.model_label)
@@ -303,8 +340,48 @@ class MainWindow(QMainWindow):
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
 
+    def _format_time(self, ms: int) -> str:
+        """Format milliseconds as m:ss."""
+        secs = ms // 1000
+        mins = secs // 60
+        secs = secs % 60
+        return f"{mins}:{secs:02d}"
+
+    def _on_position_changed(self, position: int):
+        if not self.position_slider.isSliderDown():
+            self.position_slider.setValue(position)
+        duration = self.media_player.duration()
+        self.time_label.setText(f"{self._format_time(position)} / {self._format_time(duration)}")
+
+    def _on_duration_changed(self, duration: int):
+        self.position_slider.setRange(0, duration)
+
+    def _toggle_playback(self):
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            self.play_btn.setText("▶")
+        else:
+            self.media_player.play()
+            self.play_btn.setText("⏸")
+
+    def _seek_position(self, position: int):
+        self.media_player.setPosition(position)
+
+    def _play_from_timestamp(self, seconds: float):
+        """Play audio from a specific timestamp."""
+        if self.current_audio_path:
+            self.media_player.setPosition(int(seconds * 1000))
+            self.media_player.play()
+            self.play_btn.setText("⏸")
+
+    def _load_audio(self, audio_path: str):
+        """Load audio file for playback."""
+        self.current_audio_path = audio_path
+        self.media_player.setSource(QUrl.fromLocalFile(audio_path))
+        self.play_btn.setEnabled(True)
+        self.position_slider.setEnabled(True)
+
     def queue_files(self, files: list):
-        """Add files to the transcription queue."""
         for filepath in files:
             item = QueueItem(filepath, is_url=False)
             self.queue.append(item)
@@ -314,7 +391,6 @@ class MainWindow(QMainWindow):
             self.process_next()
 
     def add_url(self):
-        """Add a URL to the queue for download and transcription."""
         url = self.url_input.text().strip()
         if not url:
             return
@@ -336,8 +412,6 @@ class MainWindow(QMainWindow):
             self.process_next()
 
     def process_next(self):
-        """Process the next item in the queue."""
-        # Find next pending item
         for item in self.queue:
             if item.status == "pending":
                 self.current_item = item
@@ -357,7 +431,6 @@ class MainWindow(QMainWindow):
             self.start_transcription(self.current_item)
 
     def download_and_transcribe(self, item: QueueItem):
-        """Download video from URL, then transcribe."""
         import os
 
         item.status = "downloading"
@@ -380,7 +453,6 @@ class MainWindow(QMainWindow):
         self.eta_label.setText(status)
 
     def on_download_complete(self, filepath: str):
-        """Download finished, start transcription."""
         if self.current_item:
             self.current_item.filepath = filepath
             self.current_item.is_url = False
@@ -395,14 +467,12 @@ class MainWindow(QMainWindow):
             self.process_next()
 
     def start_transcription(self, item: QueueItem):
-        """Start transcribing a local file."""
         import os
         from src.utils.file_utils import get_file_info
 
         item.status = "transcribing"
         item.update_display()
 
-        # Get and display file info
         info = get_file_info(item.filepath)
         self.file_info_label.setText(
             f"File: {os.path.basename(item.filepath)} | "
@@ -413,7 +483,6 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.eta_label.setText("Starting...")
 
-        # Get selected language (None for auto-detect)
         selected_lang = self.language_combo.currentText()
         language = None if selected_lang == "Auto-detect" else selected_lang.lower()
 
@@ -423,6 +492,7 @@ class MainWindow(QMainWindow):
         self.transcription_worker.language_detected.connect(self.on_language_detected)
         self.transcription_worker.model_upgraded.connect(self.on_model_upgraded)
         self.transcription_worker.quality_warning.connect(self.on_quality_warning)
+        self.transcription_worker.hardware_info.connect(self.on_hardware_info)
         self.transcription_worker.completed.connect(self.on_transcription_complete)
         self.transcription_worker.error.connect(self.on_transcription_error)
         self.transcription_worker.start()
@@ -436,48 +506,110 @@ class MainWindow(QMainWindow):
             self.eta_label.setText("Calculating...")
 
     def on_text_chunk(self, text: str):
-        """Append new transcribed text to preview."""
-        self.preview_text.append(text)
-        # Auto-scroll to bottom
+        """Append text, converting timestamps to clickable links."""
+        # Check if this is a timestamped segment [HH:MM:SS]
+        timestamp_pattern = r'\[(\d{2}):(\d{2}):(\d{2})\]'
+
+        # For status messages in brackets, just append
+        if text.startswith('[') and not re.match(timestamp_pattern, text):
+            self.preview_text.append(f"<i style='color: #666;'>{text}</i>")
+        else:
+            self.preview_text.insertPlainText(text)
+
+        # Auto-scroll
         scrollbar = self.preview_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def on_language_detected(self, language: str, confidence: float):
-        """Show detected language in preview (non-blocking)."""
         self.preview_text.append(
-            f"[Detected language: {language} ({confidence:.0%} confidence)]\n"
+            f"<i style='color: #666;'>[Detected language: {language} ({confidence:.0%} confidence)]</i>"
         )
 
+    def on_hardware_info(self, info: str):
+        self.model_label.setText(f"Model: medium | {info}")
+
     def on_model_upgraded(self, old_model: str, new_model: str, reason: str):
-        """Notify user of automatic model upgrade."""
-        self.model_label.setText(f"Model: {new_model} (upgraded from {old_model})")
-        self.preview_text.append(f"\n[Model upgraded to {new_model}: {reason}]\n")
+        self.model_label.setText(f"Model: {new_model} (upgraded)")
+        self.preview_text.append(
+            f"<i style='color: #666;'>[Model upgraded to {new_model}: {reason}]</i>"
+        )
 
     def on_quality_warning(self, message: str):
-        """Show quality warning but continue."""
         if self.current_item:
             self.current_item.status = "warning"
             self.current_item.update_display()
-        self.preview_text.append(f"\n[Warning: {message}]\n")
+        self.preview_text.append(f"<i style='color: #c90;'>[Warning: {message}]</i>")
 
-    def on_transcription_complete(self, vtt_path: str, txt_path: str):
-        """Transcription finished successfully."""
+    def on_transcription_complete(self, vtt_path: str, txt_path: str, audio_path: str):
         import subprocess
 
         if self.current_item:
             self.current_item.status = "completed"
+            self.current_item.audio_path = audio_path
             self.current_item.update_display()
 
         self.progress_bar.setValue(100)
         self.eta_label.setText("Complete!")
 
-        # Open the result file
+        # Load audio for playback
+        if audio_path:
+            self._load_audio(audio_path)
+
+        # Load VTT with clickable timestamps
+        self._display_vtt_with_links(vtt_path)
+
+        # Open result
         subprocess.run(["open", vtt_path], check=False)
 
         self.process_next()
 
+    def _display_vtt_with_links(self, vtt_path: str):
+        """Load VTT and display with clickable timestamp links."""
+        try:
+            with open(vtt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Parse VTT and create HTML with clickable timestamps
+            html_parts = ["<div style='font-family: -apple-system, sans-serif;'>"]
+
+            # Match VTT cues: timestamp --> timestamp\ntext
+            pattern = r'(\d{2}:\d{2}:\d{2}\.\d{3}) --> \d{2}:\d{2}:\d{2}\.\d{3}\n(.+?)(?=\n\n|\n\d+\n|$)'
+
+            for match in re.finditer(pattern, content, re.DOTALL):
+                timestamp = match.group(1)
+                text = match.group(2).strip()
+
+                # Parse timestamp to seconds
+                parts = timestamp.replace(',', '.').split(':')
+                hours, mins, secs = int(parts[0]), int(parts[1]), float(parts[2])
+                total_secs = hours * 3600 + mins * 60 + secs
+
+                # Format display timestamp
+                display_ts = f"{int(mins)}:{int(secs):02d}"
+                if hours > 0:
+                    display_ts = f"{hours}:{int(mins):02d}:{int(secs):02d}"
+
+                # Handle speaker tags <v Speaker>text</v>
+                speaker_match = re.match(r'<v ([^>]+)>(.+)</v>', text, re.DOTALL)
+                if speaker_match:
+                    speaker = speaker_match.group(1)
+                    text = speaker_match.group(2)
+                    html_parts.append(
+                        f"<p><a href='ts://{total_secs}' style='color: #2962ff;'>[{display_ts}]</a> "
+                        f"<b>{speaker}:</b> {text}</p>"
+                    )
+                else:
+                    html_parts.append(
+                        f"<p><a href='ts://{total_secs}' style='color: #2962ff;'>[{display_ts}]</a> {text}</p>"
+                    )
+
+            html_parts.append("</div>")
+            self.preview_text.setHtml('\n'.join(html_parts))
+
+        except Exception as e:
+            pass  # Keep existing preview on error
+
     def on_transcription_error(self, error_msg: str):
-        """Handle transcription error."""
         if self.current_item:
             self.current_item.status = "error"
             self.current_item.update_display()
@@ -487,7 +619,6 @@ class MainWindow(QMainWindow):
         self.process_next()
 
     def show_error(self, title: str, message: str):
-        """Display error with smart suggestions."""
         from src.utils.error_handler import get_error_suggestion
 
         suggestion = get_error_suggestion(message)
@@ -497,7 +628,6 @@ class MainWindow(QMainWindow):
         self.error_label.setVisible(True)
 
     def cancel_current(self):
-        """Cancel the current transcription."""
         if self.transcription_worker:
             self.transcription_worker.cancel()
             self.transcription_worker = None
@@ -513,7 +643,6 @@ class MainWindow(QMainWindow):
         self.process_next()
 
     def retry_selected(self):
-        """Retry the selected failed item."""
         selected = self.queue_list.currentItem()
         if selected and isinstance(selected, QueueItem):
             if selected.status in ("error", "warning"):
@@ -523,7 +652,6 @@ class MainWindow(QMainWindow):
                     self.process_next()
 
     def clear_completed(self):
-        """Remove completed items from queue."""
         items_to_remove = [
             item for item in self.queue
             if item.status == "completed"
