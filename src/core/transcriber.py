@@ -1,16 +1,56 @@
 """
 Transcription engine using faster-whisper.
-Handles model selection, confidence analysis, speaker diarization, and output generation.
+Handles model loading, transcription, quality assessment, speaker diarization, and output.
 """
 
 import os
 import time
 import platform
-from dataclasses import dataclass, field
+import psutil
+from dataclasses import dataclass
 from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.utils.file_utils import extract_audio, generate_output_paths, get_file_info
+from src.core.diarization import run_diarization, assign_speakers_to_segments, DiarizationError, TokenValidationError
+from src.ui.settings_dialog import get_hf_token, is_speaker_id_enabled
+from src.utils.logger import get_logger, log_exception
+
+
+# Memory requirements per model (approximate, in GB)
+MODEL_MEMORY_REQUIREMENTS = {
+    "tiny": 1.0,
+    "base": 1.5,
+    "small": 2.5,
+    "medium": 5.0,
+    "large": 10.0,
+}
+
+
+def check_memory_available(model_size: str, file_duration_minutes: float) -> tuple[bool, str]:
+    """
+    Check if sufficient memory is available for transcription.
+    Returns (is_ok, warning_message).
+    """
+    try:
+        mem = psutil.virtual_memory()
+        available_gb = mem.available / (1024 ** 3)
+
+        required_gb = MODEL_MEMORY_REQUIREMENTS.get(model_size, 5.0)
+        # Add buffer for audio processing (roughly 0.1GB per 10 minutes)
+        required_gb += file_duration_minutes * 0.01
+
+        if available_gb < required_gb:
+            return False, (
+                f"Low memory: {available_gb:.1f}GB available, ~{required_gb:.1f}GB needed. "
+                f"Try closing other apps or using a smaller model."
+            )
+        elif available_gb < required_gb * 1.5:
+            return True, f"Memory is tight ({available_gb:.1f}GB available). Large files may be slow."
+        else:
+            return True, ""
+    except Exception:
+        return True, ""  # Don't block on errors
 
 
 @dataclass
@@ -20,7 +60,7 @@ class TranscriptionSegment:
     end: float
     text: str
     confidence: float
-    speaker: Optional[str] = None  # Speaker label (e.g., "Speaker 1")
+    speaker: Optional[str] = None
 
 
 @dataclass
@@ -31,7 +71,7 @@ class QualityMetrics:
     repetition_score: float
 
 
-def detect_optimal_settings():
+def detect_optimal_settings() -> tuple[str, str, str]:
     """
     Auto-detect hardware and return optimal device/compute settings.
     Returns (device, compute_type, description)
@@ -42,106 +82,124 @@ def detect_optimal_settings():
     except ImportError:
         has_torch = False
 
-    # Check for Apple Silicon
-    if platform.system() == "Darwin" and platform.processor() == "arm":
-        if has_torch and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            # Apple Silicon with MPS - use float16 for speed
-            return "auto", "float16", "Apple Silicon (Metal)"
-        else:
-            # Fallback for bundled app without torch - use int8 on CPU
-            return "cpu", "int8", "Apple Silicon (CPU)"
-
-    # Check for CUDA
+    # CUDA GPU
     if has_torch and torch.cuda.is_available():
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
-        if gpu_mem >= 8:
-            return "cuda", "float16", f"CUDA GPU ({gpu_mem:.0f}GB)"
-        else:
-            return "cuda", "int8", f"CUDA GPU ({gpu_mem:.0f}GB, using int8)"
+        compute = "float16" if gpu_mem >= 8 else "int8"
+        return "cuda", compute, f"CUDA GPU ({gpu_mem:.0f}GB)"
 
-    # Fallback to CPU
+    # Apple Silicon
+    if platform.system() == "Darwin" and platform.processor() == "arm":
+        return "cpu", "int8", "Apple Silicon (optimized)"
+
+    # Fallback
     return "cpu", "int8", "CPU"
 
 
+# Language code mapping
+LANGUAGE_CODES = {
+    "english": "en", "spanish": "es", "french": "fr", "german": "de",
+    "italian": "it", "portuguese": "pt", "dutch": "nl", "russian": "ru",
+    "chinese": "zh", "japanese": "ja", "korean": "ko", "arabic": "ar",
+    "hindi": "hi", "turkish": "tr", "polish": "pl", "ukrainian": "uk",
+    "vietnamese": "vi", "thai": "th", "indonesian": "id", "malay": "ms",
+    "swedish": "sv", "norwegian": "no", "danish": "da", "finnish": "fi",
+    "greek": "el", "czech": "cs", "romanian": "ro", "hungarian": "hu",
+    "hebrew": "he",
+}
+
+
 class TranscriptionWorker(QThread):
-    """
-    Background worker for transcription.
-    Handles model loading, transcription, quality assessment, and output.
-    """
+    """Background worker for transcription with quality assessment and speaker ID."""
 
     # Signals
     progress = pyqtSignal(float, int)  # percent, eta_seconds
-    text_chunk = pyqtSignal(str)  # New transcribed text (status messages)
-    segment_ready = pyqtSignal(float, float, str, str)  # start, end, text, speaker - for live clickable preview
+    status_message = pyqtSignal(str)  # status updates (rendered as gray italic)
+    segment_ready = pyqtSignal(float, float, str, str)  # start, end, text, speaker
     language_detected = pyqtSignal(str, float)  # language, confidence
     model_upgraded = pyqtSignal(str, str, str)  # old_model, new_model, reason
     quality_warning = pyqtSignal(str)  # warning message
-    hardware_info = pyqtSignal(str)  # Hardware acceleration info
+    hardware_info = pyqtSignal(str)  # hardware description
+    audio_ready = pyqtSignal(str)  # audio path for playback
     completed = pyqtSignal(str, str, str)  # vtt_path, txt_path, audio_path
     error = pyqtSignal(str)  # error message
 
     # Quality thresholds
     CONFIDENCE_THRESHOLD = 0.6
     LOW_CONFIDENCE_RATIO_THRESHOLD = 0.25
-    ASSESSMENT_DURATION = 120
+    ASSESSMENT_DURATION = 120  # seconds
 
-    # Language code mapping
-    LANGUAGE_CODES = {
-        "english": "en", "spanish": "es", "french": "fr", "german": "de",
-        "italian": "it", "portuguese": "pt", "dutch": "nl", "russian": "ru",
-        "chinese": "zh", "japanese": "ja", "korean": "ko", "arabic": "ar",
-        "hindi": "hi", "turkish": "tr", "polish": "pl", "ukrainian": "uk",
-        "vietnamese": "vi", "thai": "th", "indonesian": "id", "malay": "ms",
-        "swedish": "sv", "norwegian": "no", "danish": "da", "finnish": "fi",
-        "greek": "el", "czech": "cs", "romanian": "ro", "hungarian": "hu",
-        "hebrew": "he",
-    }
+    # Watchdog: timeout if no progress for this many seconds
+    SEGMENT_TIMEOUT = 300  # 5 minutes
 
     def __init__(self, filepath: str, initial_model: str = "medium", language: Optional[str] = None):
         super().__init__()
         self.filepath = filepath
         self.model_size = initial_model
-        self.language = self.LANGUAGE_CODES.get(language, language) if language else None
+        self.language = LANGUAGE_CODES.get(language, language) if language else None
         self._cancelled = False
         self.segments: list[TranscriptionSegment] = []
+        self._last_segment_time = time.time()
+        self._logger = get_logger()
         self.audio_path: Optional[str] = None
         self._temp_audio = False
-        self._keep_audio = False  # Keep audio for playback
 
     def run(self):
         try:
+            self._logger.info(f"Starting transcription: {self.filepath}")
             self._transcribe()
+            self._logger.info("Transcription completed successfully")
         except Exception as e:
             if not self._cancelled:
+                log_exception(e, "transcription")
                 self.error.emit(str(e))
 
     def _transcribe(self):
         """Main transcription workflow."""
         from faster_whisper import WhisperModel
 
-        # Step 1: Detect optimal hardware settings
+        # Track if speaker ID was successfully used (for VTT output)
+        self._speaker_id_used = False
+
+        # Step 1: Hardware detection
         device, compute_type, hw_desc = detect_optimal_settings()
         self.hardware_info.emit(f"Using {hw_desc}")
-        self.text_chunk.emit(f"[Hardware: {hw_desc}]\n")
+        self.status_message.emit(f"[Hardware: {hw_desc}]")
+        self._logger.info(f"Hardware: {hw_desc}, device={device}, compute={compute_type}")
 
-        # Step 2: Prepare audio (keep for playback)
-        self.text_chunk.emit("Preparing audio...\n")
+        # Step 2: Prepare audio
+        self.status_message.emit("[Preparing audio...]")
         self.audio_path = self._prepare_audio()
-        self._keep_audio = True  # Keep for timestamp playback
+        self.audio_ready.emit(self.audio_path)
 
-        # Step 3: Load model with optimal settings
-        self.text_chunk.emit(f"Loading {self.model_size} model ({compute_type})...\n")
-        model = self._load_model(self.model_size, device, compute_type)
+        # Step 2.5: Memory check
+        info = get_file_info(self.audio_path)
+        duration_minutes = info.get('duration', 0) / 60
+        mem_ok, mem_warning = check_memory_available(self.model_size, duration_minutes)
+        if not mem_ok:
+            self.quality_warning.emit(mem_warning)
+            self._logger.warning(f"Memory warning: {mem_warning}")
+        elif mem_warning:
+            self.status_message.emit(f"[{mem_warning}]")
 
-        # Step 4: Get audio duration
+        # Step 3: Load model (check cancellation before slow operation)
+        if self._cancelled:
+            return
+        self.status_message.emit(f"[Loading {self.model_size} model ({compute_type})...]")
+        self._logger.info(f"Loading model: {self.model_size}")
+        model = WhisperModel(self.model_size, device=device, compute_type=compute_type)
+        if self._cancelled:
+            return
+
+        # Step 4: Get duration
         info = get_file_info(self.audio_path)
         total_duration = info.get('duration', 0)
 
         # Step 5: Transcribe
-        lang_info = f" (language: {self.language})" if self.language else " (auto-detecting language)"
-        self.text_chunk.emit(f"Starting transcription{lang_info}...\n\n")
+        lang_info = f"language: {self.language}" if self.language else "auto-detecting language"
+        self.status_message.emit(f"[Starting transcription ({lang_info})...]")
 
-        segments_generator, info = model.transcribe(
+        segments_gen, trans_info = model.transcribe(
             self.audio_path,
             beam_size=5,
             word_timestamps=True,
@@ -149,37 +207,41 @@ class TranscriptionWorker(QThread):
             language=self.language
         )
 
-        # Emit detected language
-        detected_lang = info.language
-        lang_prob = info.language_probability
-        self.language_detected.emit(detected_lang, lang_prob)
+        self.language_detected.emit(trans_info.language, trans_info.language_probability)
 
         # Process segments
         start_time = time.time()
         assessed = False
 
-        for segment in segments_generator:
+        for segment in segments_gen:
             if self._cancelled:
                 return
 
-            word_confidences = []
-            if segment.words:
-                word_confidences = [w.probability for w in segment.words]
+            # Watchdog: check for timeout (no progress)
+            now = time.time()
+            if now - self._last_segment_time > self.SEGMENT_TIMEOUT:
+                self._logger.error(f"Watchdog timeout: no segment for {self.SEGMENT_TIMEOUT}s")
+                raise RuntimeError(
+                    f"Transcription appears stuck (no progress for {self.SEGMENT_TIMEOUT // 60} minutes). "
+                    "The file may be corrupted or incompatible."
+                )
+            self._last_segment_time = now
 
-            avg_conf = sum(word_confidences) / len(word_confidences) if word_confidences else 0.8
+            # Calculate confidence
+            word_confs = [w.probability for w in segment.words] if segment.words else []
+            avg_conf = sum(word_confs) / len(word_confs) if word_confs else 0.8
 
-            trans_segment = TranscriptionSegment(
+            trans_seg = TranscriptionSegment(
                 start=segment.start,
                 end=segment.end,
                 text=segment.text.strip(),
                 confidence=avg_conf,
-                speaker=None  # Will be filled by diarization
+                speaker=None
             )
-            self.segments.append(trans_segment)
-
-            # Emit segment with timestamp for live clickable preview
+            self.segments.append(trans_seg)
             self.segment_ready.emit(segment.start, segment.end, segment.text.strip(), "")
 
+            # Progress
             if total_duration > 0:
                 percent = (segment.end / total_duration) * 100
                 elapsed = time.time() - start_time
@@ -190,217 +252,165 @@ class TranscriptionWorker(QThread):
                 else:
                     self.progress.emit(percent, 0)
 
-            # Quality assessment
+            # Quality assessment at 2 minutes
             if not assessed and segment.end >= self.ASSESSMENT_DURATION:
                 assessed = True
                 quality = self._assess_quality()
 
-                if quality.avg_confidence < self.CONFIDENCE_THRESHOLD or \
-                   quality.low_confidence_ratio > self.LOW_CONFIDENCE_RATIO_THRESHOLD:
+                if (quality.avg_confidence < self.CONFIDENCE_THRESHOLD or
+                        quality.low_confidence_ratio > self.LOW_CONFIDENCE_RATIO_THRESHOLD):
 
                     if self.model_size != "large":
                         old_model = self.model_size
                         self.model_size = "large"
                         self.model_upgraded.emit(
-                            old_model,
-                            "large",
-                            f"Low confidence ({quality.avg_confidence:.0%}), upgrading for better accuracy"
+                            old_model, "large",
+                            f"Low confidence ({quality.avg_confidence:.0%})"
                         )
-
                         self.segments = []
-                        model = self._load_model("large", device, compute_type)
-                        segments_generator, info = model.transcribe(
+                        model = WhisperModel("large", device=device, compute_type=compute_type)
+                        segments_gen, trans_info = model.transcribe(
                             self.audio_path,
                             beam_size=5,
                             word_timestamps=True,
                             vad_filter=True,
                             language=self.language
                         )
-                        self.text_chunk.emit("\n\n[Restarting with large model...]\n\n")
-                        assessed = True
                         continue
                     else:
                         self.quality_warning.emit(
-                            f"Quality issues detected (confidence: {quality.avg_confidence:.0%}). "
-                            "Results may be incomplete."
+                            f"Quality issues detected ({quality.avg_confidence:.0%} confidence)"
                         )
 
         # Step 6: Speaker diarization
-        self.text_chunk.emit("\n\n[Identifying speakers...]\n")
-        self.progress.emit(95, 0)
+        if self._cancelled:
+            return
+        self.progress.emit(95, -1)
         self._run_diarization()
 
-        # Step 7: Generate output files
+        # Step 7: Save outputs
+        if self._cancelled:
+            return
         vtt_path, txt_path = self._save_outputs()
-
-        # Emit completion with audio path for playback
         self.completed.emit(vtt_path, txt_path, self.audio_path)
 
     def _prepare_audio(self) -> str:
         """Extract audio from video if needed."""
         info = get_file_info(self.filepath)
-
         if info.get('has_video') and info.get('has_audio'):
             self._temp_audio = True
             return extract_audio(self.filepath)
-
         return self.filepath
-
-    def _load_model(self, model_size: str, device: str, compute_type: str):
-        """Load Whisper model with specified settings."""
-        from faster_whisper import WhisperModel
-
-        model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type
-        )
-
-        return model
 
     def _run_diarization(self):
         """Run speaker diarization and assign speakers to segments."""
-        try:
-            from pyannote.audio import Pipeline
-            import torch
-        except ImportError:
-            self.text_chunk.emit("[Speaker ID unavailable in bundled app]\n")
+        # Check if speaker ID is enabled
+        if not is_speaker_id_enabled():
+            self.status_message.emit("[Speaker ID: Disabled]")
+            # Don't assign speakers - leave them as None for VTT output
+            self._speaker_id_used = False
             return
 
-        try:
-            # Check for HF token
-            hf_token = os.environ.get('HF_TOKEN')
-            if not hf_token:
-                self.text_chunk.emit("[Skipping speaker ID: HF_TOKEN not set]\n")
-                return
+        # Get HF token
+        hf_token = get_hf_token()
+        if not hf_token:
+            self.status_message.emit("[Speaker ID: No token configured - see Settings]")
+            self._speaker_id_used = False
+            return
 
-            # Load diarization pipeline
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token
+        # Status callback
+        def status_cb(msg: str):
+            self.status_message.emit(msg)
+
+        try:
+            self.status_message.emit("[Speaker ID: Starting...]")
+            turns = run_diarization(
+                self.audio_path,
+                hf_token,
+                status_callback=status_cb
             )
 
-            # Use MPS on Apple Silicon if available
-            if torch.backends.mps.is_available():
-                pipeline.to(torch.device("mps"))
-            elif torch.cuda.is_available():
-                pipeline.to(torch.device("cuda"))
+            if not turns:
+                self.status_message.emit("[Speaker ID: No speakers detected]")
+                self._speaker_id_used = False
+                return
 
-            # Run diarization
-            diarization = pipeline(self.audio_path)
+            speaker_map = assign_speakers_to_segments(self.segments, turns)
+            self._speaker_id_used = True
+            # Debug: verify speakers were assigned
+            assigned = sum(1 for s in self.segments if s.speaker)
+            self.status_message.emit(f"[Speaker ID complete: {len(speaker_map)} speaker(s), {assigned}/{len(self.segments)} segments tagged]")
 
-            # Build speaker timeline
-            speaker_timeline = []
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                speaker_timeline.append({
-                    'start': turn.start,
-                    'end': turn.end,
-                    'speaker': speaker
-                })
+        except TokenValidationError as e:
+            self.status_message.emit(f"[Speaker ID: Token error - {str(e)[:40]}]")
+            self._speaker_id_used = False
 
-            # Create human-readable speaker labels
-            speaker_map = {}
-            speaker_count = 0
-
-            # Assign speakers to transcript segments
-            for segment in self.segments:
-                seg_mid = (segment.start + segment.end) / 2
-
-                for turn in speaker_timeline:
-                    if turn['start'] <= seg_mid <= turn['end']:
-                        raw_speaker = turn['speaker']
-                        if raw_speaker not in speaker_map:
-                            speaker_count += 1
-                            speaker_map[raw_speaker] = f"Speaker {speaker_count}"
-                        segment.speaker = speaker_map[raw_speaker]
-                        break
-
-            num_speakers = len(speaker_map)
-            self.text_chunk.emit(f"[Identified {num_speakers} speaker(s)]\n")
+        except DiarizationError as e:
+            self.status_message.emit(f"[Speaker ID failed: {str(e)[:40]}]")
+            self._speaker_id_used = False
 
         except Exception as e:
-            self.text_chunk.emit(f"[Speaker ID unavailable: {str(e)[:50]}]\n")
+            self.status_message.emit(f"[Speaker ID error: {str(e)[:40]}]")
+            self._speaker_id_used = False
 
     def _assess_quality(self) -> QualityMetrics:
-        """Assess transcription quality."""
+        """Assess transcription quality from collected segments."""
         if not self.segments:
             return QualityMetrics(0.8, 0.0, 0.0)
 
         confidences = [s.confidence for s in self.segments]
         avg_conf = sum(confidences) / len(confidences)
+        low_count = sum(1 for c in confidences if c < self.CONFIDENCE_THRESHOLD)
+        low_ratio = low_count / len(confidences)
 
-        low_conf_count = sum(1 for c in confidences if c < self.CONFIDENCE_THRESHOLD)
-        low_conf_ratio = low_conf_count / len(confidences)
-
+        # Repetition check
         texts = [s.text.lower() for s in self.segments]
-        repetition_score = self._calculate_repetition(texts)
+        reps = sum(1 for i in range(1, len(texts)) if texts[i] == texts[i-1] and len(texts[i]) > 10)
+        rep_score = reps / len(texts) if texts else 0
 
-        return QualityMetrics(
-            avg_confidence=avg_conf,
-            low_confidence_ratio=low_conf_ratio,
-            repetition_score=repetition_score
-        )
-
-    def _calculate_repetition(self, texts: list[str]) -> float:
-        """Calculate repetition score."""
-        if len(texts) < 3:
-            return 0.0
-
-        repetitions = 0
-        for i in range(1, len(texts)):
-            if texts[i] == texts[i-1] and len(texts[i]) > 10:
-                repetitions += 1
-
-        return repetitions / len(texts)
+        return QualityMetrics(avg_conf, low_ratio, rep_score)
 
     def _save_outputs(self) -> tuple[str, str]:
-        """Save transcription to VTT and TXT files with speaker labels."""
+        """Save transcription to VTT and TXT with speaker labels."""
         vtt_path, txt_path = generate_output_paths(self.filepath)
 
-        # Write VTT with speakers
+        # Debug: log speaker ID state
+        self._logger.info(f"Saving outputs: _speaker_id_used={self._speaker_id_used}, segments={len(self.segments)}")
+        if self.segments:
+            sample = self.segments[0]
+            self._logger.info(f"First segment speaker: '{sample.speaker}', type: {type(sample.speaker)}")
+
+        # VTT - only include speaker tags if speaker ID was successfully used
         with open(vtt_path, 'w', encoding='utf-8') as f:
             f.write("WEBVTT\n\n")
-
             for i, seg in enumerate(self.segments, 1):
-                start = self._format_timestamp(seg.start)
-                end = self._format_timestamp(seg.end)
-                f.write(f"{i}\n")
-                f.write(f"{start} --> {end}\n")
-                if seg.speaker:
+                start = self._format_vtt_time(seg.start)
+                end = self._format_vtt_time(seg.end)
+                f.write(f"{i}\n{start} --> {end}\n")
+                if self._speaker_id_used and seg.speaker:
                     f.write(f"<v {seg.speaker}>{seg.text}</v>\n\n")
                 else:
                     f.write(f"{seg.text}\n\n")
 
-        # Write TXT with speaker labels
+        # TXT - only include speaker labels if speaker ID was successfully used
         with open(txt_path, 'w', encoding='utf-8') as f:
             current_speaker = None
             for seg in self.segments:
-                if seg.speaker and seg.speaker != current_speaker:
+                if self._speaker_id_used and seg.speaker and seg.speaker != current_speaker:
                     current_speaker = seg.speaker
                     f.write(f"\n{current_speaker}:\n")
                 f.write(f"{seg.text} ")
 
         return vtt_path, txt_path
 
-    def _format_timestamp(self, seconds: float) -> str:
+    def _format_vtt_time(self, seconds: float) -> str:
         """Format seconds as VTT timestamp."""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int((seconds % 1) * 1000)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
-
-    def _cleanup(self):
-        """Clean up temporary files."""
-        if self._temp_audio and not self._keep_audio and self.audio_path:
-            if os.path.exists(self.audio_path):
-                try:
-                    os.remove(self.audio_path)
-                except OSError:
-                    pass
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds % 1) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
     def cancel(self):
-        """Cancel the transcription."""
+        """Cancel transcription."""
         self._cancelled = True
-        self._keep_audio = False
-        self._cleanup()

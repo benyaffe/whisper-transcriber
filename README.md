@@ -54,6 +54,18 @@ python setup.py py2app
 - **VTT**: WebVTT with timestamps (great for search/reference)
 - **TXT**: Clean prose without timestamps
 
+## Speaker Identification (Optional)
+
+Identifies different speakers in your audio using pyannote.audio. Requires a free HuggingFace account:
+
+1. Create an account at [huggingface.co](https://huggingface.co/join)
+2. Accept the license for all three required models:
+   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+   - [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+3. Create an access token at [Settings > Access Tokens](https://huggingface.co/settings/tokens) with **Read** permission
+4. Enter the token in the app's Settings dialog
+
 ## Model Selection
 
 Starts with `medium` model. If confidence is low after 120 seconds, automatically restarts with `large` model.

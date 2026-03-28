@@ -1,6 +1,50 @@
 """
 Smart error handling with suggestions for remediation.
+Includes error codes for easier troubleshooting.
 """
+
+# Error codes for common issues
+ERROR_CODES = {
+    "E001": "Network connectivity error",
+    "E002": "HuggingFace token invalid or expired",
+    "E003": "Model license not accepted",
+    "E004": "FFmpeg not found or broken",
+    "E005": "File not found or unreadable",
+    "E006": "Unsupported file format",
+    "E007": "Out of memory",
+    "E008": "Transcription timeout",
+    "E009": "GPU/CUDA error",
+    "E010": "Model download failed",
+}
+
+
+def get_error_code(error_message: str) -> str:
+    """
+    Determine error code from error message.
+    Returns error code string or empty string if unknown.
+    """
+    error_lower = error_message.lower()
+
+    if 'network' in error_lower or 'connection' in error_lower or 'timeout' in error_lower:
+        if 'download' in error_lower or 'huggingface' in error_lower:
+            return "E010"
+        return "E001"
+    if 'token' in error_lower and ('invalid' in error_lower or 'expired' in error_lower or '401' in error_lower):
+        return "E002"
+    if 'license' in error_lower or 'gated' in error_lower or 'accept' in error_lower:
+        return "E003"
+    if 'ffmpeg' in error_lower or 'ffprobe' in error_lower:
+        return "E004"
+    if 'not found' in error_lower or 'no such file' in error_lower or 'permission' in error_lower:
+        return "E005"
+    if 'unsupported' in error_lower or 'codec' in error_lower or 'invalid format' in error_lower:
+        return "E006"
+    if 'memory' in error_lower or 'oom' in error_lower:
+        return "E007"
+    if 'cuda' in error_lower or 'gpu' in error_lower:
+        return "E009"
+
+    return ""
 
 
 def get_error_suggestion(error_message: str) -> str:

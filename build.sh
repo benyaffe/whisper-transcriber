@@ -27,8 +27,8 @@ fi
 echo "Building app bundle with PyInstaller (this may take several minutes)..."
 pyinstaller WhisperTranscriber.spec --noconfirm
 
-# Verify FFmpeg was bundled
-if [ -f "dist/Whisper Transcriber.app/Contents/MacOS/bin/ffmpeg" ]; then
+# Verify FFmpeg was bundled (PyInstaller puts it in Frameworks/bin/)
+if [ -f "dist/Whisper Transcriber.app/Contents/Frameworks/bin/ffmpeg" ]; then
     echo "✓ FFmpeg bundled successfully"
 else
     echo "⚠ Warning: FFmpeg may not be bundled correctly"

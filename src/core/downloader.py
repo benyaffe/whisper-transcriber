@@ -116,20 +116,20 @@ class VideoDownloader(QThread):
             except ValueError:
                 percent = 0
 
-            speed = d.get('_speed_str', 'Unknown speed')
-            speed = re.sub(r'\x1b\[[0-9;]*m', '', speed)
-
+            # Get ETA if available
             eta = d.get('_eta_str', '')
-            eta = re.sub(r'\x1b\[[0-9;]*m', '', eta)
+            eta = re.sub(r'\x1b\[[0-9;]*m', '', eta).strip()
 
-            status = f"{speed}"
-            if eta:
-                status += f" | ETA: {eta}"
+            # Format status consistently
+            if eta and eta != 'Unknown':
+                status = f"ETA: {eta}"
+            else:
+                status = "Downloading..."
 
             self.progress.emit(percent, status)
 
         elif d['status'] == 'finished':
-            self.progress.emit(100, "Download complete, processing...")
+            self.progress.emit(100, "Processing...")
 
     def cancel(self):
         self._cancelled = True

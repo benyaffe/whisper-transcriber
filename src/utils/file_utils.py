@@ -9,19 +9,108 @@ import json
 import sys
 
 
+def check_network_connectivity() -> tuple[bool, str]:
+    """
+    Check if network is available for HuggingFace downloads.
+    Returns (is_connected, message).
+    """
+    import socket
+    try:
+        # Try to connect to HuggingFace
+        socket.create_connection(("huggingface.co", 443), timeout=5)
+        return True, "Network available"
+    except (socket.timeout, OSError):
+        pass
+
+    # Fallback: try Google DNS
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=3)
+        return True, "Network available (HuggingFace may be slow)"
+    except (socket.timeout, OSError):
+        return False, "No internet connection. Speaker ID requires network access for model downloads."
+
+
+def check_ffmpeg_health() -> tuple[bool, str]:
+    """
+    Verify FFmpeg is available and functional.
+    Returns (is_healthy, message).
+    """
+    ffmpeg_path = get_bundled_binary('ffmpeg')
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, '-version'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            # Extract version from first line
+            version_line = result.stdout.split('\n')[0] if result.stdout else "unknown"
+            return True, f"FFmpeg OK: {version_line[:50]}"
+        else:
+            return False, f"FFmpeg error: {result.stderr[:50]}"
+    except FileNotFoundError:
+        return False, "FFmpeg not found. Audio/video processing will fail."
+    except subprocess.TimeoutExpired:
+        return False, "FFmpeg timed out during health check."
+    except Exception as e:
+        return False, f"FFmpeg check failed: {str(e)[:50]}"
+
+
+def validate_input_file(filepath: str) -> tuple[bool, str]:
+    """
+    Validate an input file before queueing for transcription.
+    Returns (is_valid, message).
+    """
+    # Check exists
+    if not os.path.exists(filepath):
+        return False, f"File not found: {filepath}"
+
+    # Check is file (not directory)
+    if not os.path.isfile(filepath):
+        return False, f"Not a file: {filepath}"
+
+    # Check readable
+    if not os.access(filepath, os.R_OK):
+        return False, f"Cannot read file (permission denied): {os.path.basename(filepath)}"
+
+    # Check not empty
+    size = os.path.getsize(filepath)
+    if size == 0:
+        return False, f"File is empty (0 bytes): {os.path.basename(filepath)}"
+
+    # Check extension
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext not in get_supported_extensions():
+        return False, f"Unsupported format '{ext}'. Supported: mp4, mp3, wav, etc."
+
+    # All checks passed
+    return True, f"File OK: {os.path.basename(filepath)} ({size / 1024 / 1024:.1f} MB)"
+
+
 def get_bundled_binary(name: str) -> str:
     """
     Get path to a bundled binary (ffmpeg/ffprobe).
     Falls back to system PATH if not bundled.
     """
-    # When running as .app bundle, binaries are in Resources/bin/
     if getattr(sys, 'frozen', False):
-        # Running as bundled app
+        # Running as bundled app - check multiple possible locations
         bundle_dir = os.path.dirname(sys.executable)
-        resources_dir = os.path.abspath(os.path.join(bundle_dir, '..', 'Resources'))
-        bundled_path = os.path.join(resources_dir, 'bin', name)
-        if os.path.exists(bundled_path):
-            return bundled_path
+
+        # PyInstaller puts data files in various locations
+        possible_paths = [
+            # PyInstaller: Contents/Frameworks/bin/ (common for COLLECT mode)
+            os.path.abspath(os.path.join(bundle_dir, '..', 'Frameworks', 'bin', name)),
+            # PyInstaller: Contents/MacOS/bin/
+            os.path.join(bundle_dir, 'bin', name),
+            # py2app: Contents/Resources/bin/
+            os.path.abspath(os.path.join(bundle_dir, '..', 'Resources', 'bin', name)),
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
 
     # Fall back to system binary
     return name

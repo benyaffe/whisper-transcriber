@@ -1,10 +1,17 @@
 # Core transcription
 faster-whisper>=1.0.0
 
-# Speaker diarization
-pyannote.audio>=3.1.0
+# Audio processing
+scipy>=1.10.0
+soundfile>=0.12.0
+
+# Speaker diarization (token-free default)
+speechbrain>=1.0.0
 torch>=2.0.0
 torchaudio>=2.0.0
+
+# Speaker diarization (optional, requires HF token)
+pyannote.audio>=3.1.0
 
 # Video downloads
 yt-dlp>=2024.1.0
@@ -12,7 +19,10 @@ yt-dlp>=2024.1.0
 # GUI
 PyQt6>=6.6.0
 
+# Secure token storage
+keyring>=24.0.0
+
 # App bundling
-py2app>=0.28.0
+pyinstaller>=6.0.0
 
 # ffmpeg is bundled (static build downloaded during build)
