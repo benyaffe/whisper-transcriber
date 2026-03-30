@@ -10,6 +10,9 @@ speechbrain>=1.0.0
 torch>=2.0.0
 torchaudio>=2.0.0
 
+# HuggingFace model hub (used directly for token validation and model downloads)
+huggingface_hub>=0.20.0
+
 # Speaker diarization (optional, requires HF token)
 pyannote.audio>=3.1.0
 
