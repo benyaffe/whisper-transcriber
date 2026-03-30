@@ -55,8 +55,8 @@ OPTIONS = {
         'CFBundleName': 'Whisper Transcriber',
         'CFBundleDisplayName': 'Whisper Transcriber',
         'CFBundleIdentifier': 'com.whispertranscriber.app',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': '1.0.1',
+        'CFBundleShortVersionString': '1.0.1',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.15',
         # Allow drag-drop of files onto app icon

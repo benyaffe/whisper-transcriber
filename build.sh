@@ -36,7 +36,7 @@ fi
 
 # Create styled DMG
 echo "Creating DMG..."
-DMG_NAME="WhisperTranscriber-1.0.0.dmg"
+DMG_NAME="WhisperTranscriber-1.0.1.dmg"
 rm -f "$DMG_NAME"
 
 create-dmg \
