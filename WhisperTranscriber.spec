@@ -190,8 +190,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Whisper Transcriber',
         'CFBundleDisplayName': 'Whisper Transcriber',
-        'CFBundleVersion': '1.0.1',
-        'CFBundleShortVersionString': '1.0.1',
+        'CFBundleVersion': '1.0.2',
+        'CFBundleShortVersionString': '1.0.2',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.15',
         # Prevent respawning on quit
