@@ -30,6 +30,14 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Running the Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest                     # skips tests/manual/
+python -m pytest -m "not integration"  # also skips tests needing network or a built app
+```
+
 ## Building the App Bundle
 
 ```bash

@@ -1,0 +1,7 @@
+# Development and test dependencies.
+# Runtime dependencies live in requirements.txt.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest
+
+pytest>=8.0.0
