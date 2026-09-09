@@ -71,6 +71,16 @@ DIARIZATION_STAGE_LABELS: dict[str, str] = {
     "discrete_diarization": "Assigning speakers",
 }
 
+# Clustering is not hooked, and on a long recording it runs for tens of seconds
+# between the "embeddings" completion tick and "discrete_diarization". Without
+# this the bar sits still under a stale "Analyzing voices", which reads exactly
+# like the hang this whole change exists to eliminate. A step's completion tick
+# fires immediately before the unhooked work starts, so naming what comes next
+# is accurate, not a guess.
+DIARIZATION_POST_STEP_LABELS: dict[str, str] = {
+    "embeddings": "Grouping speakers",
+}
+
 
 class DiarizationProgressHook:
     """Reports diarization progress to a callback as (fraction, label).
@@ -168,11 +178,16 @@ class DiarizationProgressHook:
         return min(total, 1.0)
 
     def _label(self, step_name: str, total: Optional[int], completed: Optional[int]) -> str:
+        is_completion_tick = completed is None
+        if is_completion_tick and step_name in DIARIZATION_POST_STEP_LABELS:
+            # Name the unhooked work that starts now, not the step just finished.
+            return DIARIZATION_POST_STEP_LABELS[step_name]
+
         label = DIARIZATION_STAGE_LABELS.get(step_name)
         if label is None:
             # Unknown step from a future pyannote: surface it rather than hide it.
             label = step_name.replace("_", " ").capitalize()
-        if completed is not None and total:
+        if not is_completion_tick and total:
             return f"{label} {min(completed, total)}/{total}"
         return label
 

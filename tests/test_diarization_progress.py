@@ -86,6 +86,31 @@ def test_scripted_sequence_is_monotonic_and_ends_at_one(recorder, clock):
     assert all(0.0 <= f <= 1.0 for f in fractions)
 
 
+def test_unhooked_clustering_gap_gets_its_own_label(recorder, clock):
+    """The long silent pause between embeddings and discrete_diarization.
+
+    pyannote does not hook clustering. Its completion tick for embeddings
+    fires immediately before clustering starts, so that tick is relabelled to
+    name what is actually running during the stall.
+    """
+    hook = make_hook(recorder, clock, min_interval_s=0.0)
+
+    hook("embeddings", None, completed=60, total=60)  # last incremental update
+    hook("embeddings", "artifact")                    # completion tick
+
+    assert recorder[-2][1] == "Analyzing voices 60/60"
+    assert recorder[-1][1] == "Grouping speakers"
+
+
+def test_completion_ticks_without_a_successor_keep_their_own_label(recorder, clock):
+    """Only steps followed by unhooked work get relabelled."""
+    hook = make_hook(recorder, clock, min_interval_s=0.0)
+
+    hook("segmentation", "artifact")
+
+    assert recorder[-1][1] == "Finding speech"
+
+
 def test_all_four_stage_labels_appear(recorder, clock):
     """Every stage the pipeline reports is surfaced to the UI."""
     hook = make_hook(recorder, clock, min_interval_s=0.0)
@@ -362,13 +387,17 @@ def test_stage_labels_fit_the_eta_label(main_window):
     """A clipped label defeats the point; the widest stage text must fit."""
     from PyQt6.QtGui import QFontMetrics
 
-    from src.core.diarization import DIARIZATION_STAGE_LABELS
+    from src.core.diarization import (
+        DIARIZATION_POST_STEP_LABELS,
+        DIARIZATION_STAGE_LABELS,
+    )
 
     metrics = QFontMetrics(main_window.eta_label.font())
     available = main_window.eta_label.width()
 
     # Worst case: the longest stage name with a four-digit chunk count.
-    for label in DIARIZATION_STAGE_LABELS.values():
+    all_labels = list(DIARIZATION_STAGE_LABELS.values()) + list(DIARIZATION_POST_STEP_LABELS.values())
+    for label in all_labels:
         widest = f"{label} 1200/1200"
         assert metrics.horizontalAdvance(widest) <= available, (
             f"{widest!r} needs {metrics.horizontalAdvance(widest)}px "
