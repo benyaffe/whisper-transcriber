@@ -336,3 +336,101 @@ def test_run_diarization_still_returns_turns(patched_diarization):
         (0.0, 1.0, "SPEAKER_00"),
         (1.0, 2.0, "SPEAKER_01"),
     ]
+
+
+# --- UI rendering -------------------------------------------------------------
+
+
+@pytest.fixture
+def main_window(qt_app):
+    from src.ui.main_window import MainWindow
+
+    window = MainWindow()
+    yield window
+    window.close()
+
+
+def test_main_window_renders_stage_label_and_advances_bar(main_window):
+    """The label the user reads must be the stage name, not a static string."""
+    main_window._on_diarization_progress(85.0, "Analyzing voices 340/1200")
+
+    assert main_window.progress_bar.value() == 85
+    assert main_window.eta_label.text() == "Analyzing voices 340/1200"
+
+
+def test_stage_labels_fit_the_eta_label(main_window):
+    """A clipped label defeats the point; the widest stage text must fit."""
+    from PyQt6.QtGui import QFontMetrics
+
+    from src.core.diarization import DIARIZATION_STAGE_LABELS
+
+    metrics = QFontMetrics(main_window.eta_label.font())
+    available = main_window.eta_label.width()
+
+    # Worst case: the longest stage name with a four-digit chunk count.
+    for label in DIARIZATION_STAGE_LABELS.values():
+        widest = f"{label} 1200/1200"
+        assert metrics.horizontalAdvance(widest) <= available, (
+            f"{widest!r} needs {metrics.horizontalAdvance(widest)}px "
+            f"but eta_label is {available}px"
+        )
+
+
+class _RecordingSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+
+class _FakeWorker:
+    """Stands in for TranscriptionWorker so _start_transcription can be run.
+
+    Records which signals got connected without starting a real transcription.
+    """
+
+    SIGNALS = (
+        "status_message", "progress", "diarization_progress", "segment_ready",
+        "language_detected", "model_upgraded", "quality_warning",
+        "hardware_info", "audio_ready", "completed", "error",
+    )
+
+    def __init__(self, *args, **kwargs):
+        for name in self.SIGNALS:
+            setattr(self, name, _RecordingSignal())
+        self.started = False
+
+    def start(self):
+        self.started = True
+
+
+def test_start_transcription_connects_the_diarization_signal(
+    main_window, monkeypatch, temp_audio_file
+):
+    """Guards the wiring itself: a live signal nobody connected is still silent."""
+    from src.ui import main_window as main_window_module
+
+    monkeypatch.setattr(main_window_module, "TranscriptionWorker", _FakeWorker)
+
+    item = main_window_module.QueueItem(temp_audio_file)
+    main_window._start_transcription(item)
+
+    worker = main_window.transcription_worker
+    assert worker.started, "_start_transcription never started the worker"
+    assert worker.diarization_progress.slots == [main_window._on_diarization_progress]
+
+
+def test_worker_signal_reaches_the_window(main_window, qt_app):
+    """End to end through Qt: worker signal -> connected slot -> widgets."""
+    from src.core.transcriber import TranscriptionWorker
+
+    worker = TranscriptionWorker.__new__(TranscriptionWorker)
+    TranscriptionWorker.__init__(worker, "/tmp/nonexistent.wav")
+    worker.diarization_progress.connect(main_window._on_diarization_progress)
+
+    worker.diarization_progress.emit(92.5, "Assigning speakers")
+    qt_app.processEvents()
+
+    assert main_window.progress_bar.value() == 92
+    assert main_window.eta_label.text() == "Assigning speakers"

@@ -459,7 +459,9 @@ class MainWindow(QMainWindow):
         progress_row.addWidget(self.progress_bar)
 
         self.eta_label = QLabel("")
-        self.eta_label.setFixedWidth(140)
+        # 180 rather than 140: the widest speaker-ID stage label
+        # ("Analyzing voices 340/1200") measures ~158px.
+        self.eta_label.setFixedWidth(180)
         self.eta_label.setStyleSheet("font-family: monospace;")
         progress_row.addWidget(self.eta_label)
         layout.addLayout(progress_row)
@@ -729,6 +731,7 @@ class MainWindow(QMainWindow):
         self.transcription_worker = TranscriptionWorker(item.filepath, initial_model=model, language=language)
         self.transcription_worker.status_message.connect(self._on_status_message)
         self.transcription_worker.progress.connect(self._on_transcription_progress)
+        self.transcription_worker.diarization_progress.connect(self._on_diarization_progress)
         self.transcription_worker.segment_ready.connect(self._on_segment_ready)
         self.transcription_worker.language_detected.connect(self._on_language_detected)
         self.transcription_worker.model_upgraded.connect(self._on_model_upgraded)
@@ -741,8 +744,7 @@ class MainWindow(QMainWindow):
 
     def _on_transcription_progress(self, percent: float, eta_seconds: int):
         now = int(time.time() * 1000)
-        # Always allow speaker ID updates (eta_seconds < 0) through without throttle
-        if eta_seconds >= 0 and percent < 100 and now - self._last_progress_update < self._progress_interval_ms:
+        if percent < 100 and now - self._last_progress_update < self._progress_interval_ms:
             return
         self._last_progress_update = now
 
@@ -750,10 +752,18 @@ class MainWindow(QMainWindow):
         if eta_seconds > 0:
             mins, secs = divmod(eta_seconds, 60)
             self.eta_label.setText(f"ETA: {mins:2d}m {secs:02d}s")
-        elif eta_seconds < 0:
-            self.eta_label.setText("Speaker ID...  ")
         else:
             self.eta_label.setText("Processing...  ")
+
+    def _on_diarization_progress(self, percent: float, stage_label: str):
+        """Speaker-ID phase: live stage name in place of the ETA.
+
+        No throttle here. DiarizationProgressHook already rate-limits to a
+        couple of updates a second, and it guarantees stage transitions and
+        completions get through -- re-throttling would drop exactly those.
+        """
+        self.progress_bar.setValue(int(percent))
+        self.eta_label.setText(stage_label)
 
     def _is_at_bottom(self) -> bool:
         scrollbar = self.preview_text.verticalScrollBar()

@@ -65,6 +65,20 @@ def mock_hf_token():
     return "hf_mock_test_token_12345"
 
 
+@pytest.fixture(scope="session")
+def qt_app():
+    """One offscreen QApplication for widget tests.
+
+    Session-scoped because Qt permits exactly one QApplication per process.
+    Forced offscreen so a test run never steals focus or flashes a window;
+    export QT_QPA_PLATFORM=cocoa to watch a widget test render for real.
+    """
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    yield QApplication.instance() or QApplication([])
+
+
 # --- Diarization test doubles -------------------------------------------------
 #
 # run_diarization() otherwise needs a HuggingFace token, three gated model
