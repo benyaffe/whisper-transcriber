@@ -229,3 +229,56 @@ def test_stage_weights_sum_to_one():
     """Otherwise the bar cannot reach 100% (or overshoots it)."""
     assert sum(DIARIZATION_STAGE_WEIGHTS.values()) == pytest.approx(1.0)
     assert set(DIARIZATION_STAGE_WEIGHTS) == set(DIARIZATION_STAGE_LABELS)
+
+
+# --- run_diarization wiring ---------------------------------------------------
+#
+# These use the patched_diarization fixture from conftest.py, which replaces
+# token validation, model download, audio decode and pyannote.Pipeline. They
+# import pyannote (slow, no network), so they are the only non-trivial-cost
+# tests in this file.
+
+
+def test_run_diarization_passes_hook_to_pipeline(patched_diarization):
+    """The whole point of WT-2: the pipeline must actually receive a hook."""
+    from src.core.diarization import run_diarization
+
+    updates = []
+    run_diarization(
+        "/tmp/does-not-matter.wav",
+        "hf_test_token",
+        progress_callback=lambda fraction, label: updates.append((fraction, label)),
+    )
+
+    assert patched_diarization.received_hook is not None, "pipeline was called without hook="
+
+    fractions = [f for f, _ in updates]
+    assert fractions, "progress_callback was never called"
+    assert fractions == sorted(fractions)
+    assert fractions[-1] == pytest.approx(1.0)
+    assert "Finding speech" in updates[0][1]
+
+
+def test_run_diarization_without_callback_passes_no_hook(patched_diarization):
+    """Existing callers get exactly the previous behavior, hook=None."""
+    from src.core.diarization import run_diarization
+
+    run_diarization("/tmp/does-not-matter.wav", "hf_test_token")
+
+    assert patched_diarization.received_hook is None
+
+
+def test_run_diarization_still_returns_turns(patched_diarization):
+    """Adding the hook must not disturb the return value."""
+    from src.core.diarization import run_diarization
+
+    turns = run_diarization(
+        "/tmp/does-not-matter.wav",
+        "hf_test_token",
+        progress_callback=lambda fraction, label: None,
+    )
+
+    assert [(t.start, t.end, t.speaker) for t in turns] == [
+        (0.0, 1.0, "SPEAKER_00"),
+        (1.0, 2.0, "SPEAKER_01"),
+    ]

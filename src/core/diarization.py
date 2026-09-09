@@ -404,7 +404,8 @@ def validate_hf_token(token: str) -> tuple[bool, str]:
 def run_diarization(
     audio_path: str,
     hf_token: str,
-    status_callback: Optional[Callable[[str], None]] = None
+    status_callback: Optional[Callable[[str], None]] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> list[SpeakerTurn]:
     """
     Run speaker diarization using pyannote.audio.
@@ -413,6 +414,9 @@ def run_diarization(
         audio_path: Path to audio file
         hf_token: HuggingFace token (required)
         status_callback: Optional callback for status messages
+        progress_callback: Optional callback taking (fraction, stage_label),
+            where fraction runs 0.0 to 1.0 across the pipeline's stages.
+            Called on this thread, throttled to a few times per second.
 
     Returns:
         list of SpeakerTurn
@@ -548,11 +552,17 @@ def run_diarization(
         waveform = _decode_audio_to_tensor(audio_path, sample_rate=16000)
         log(f"[Speaker ID: Decoded {waveform.shape[1] / 16000:.1f}s of audio]")
         log(f"[Speaker ID: Running diarization pipeline...]")
-        diarization = pipeline({
-            "waveform": waveform,
-            "sample_rate": 16000,
-            "uri": Path(audio_path).stem,
-        })
+        # Without a hook this is one opaque blocking call, which is what used
+        # to pin the UI at 95% for the whole phase.
+        hook = DiarizationProgressHook(progress_callback) if progress_callback else None
+        diarization = pipeline(
+            {
+                "waveform": waveform,
+                "sample_rate": 16000,
+                "uri": Path(audio_path).stem,
+            },
+            hook=hook,
+        )
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
