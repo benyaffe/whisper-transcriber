@@ -8,6 +8,40 @@ from dataclasses import dataclass
 from typing import Optional, Callable
 
 
+@dataclass(frozen=True)
+class ModelSpec:
+    """A HuggingFace repo that speaker diarization needs at runtime."""
+    repo: str
+    gated: bool
+
+    @property
+    def name(self) -> str:
+        return self.repo.split("/")[-1]
+
+    @property
+    def url(self) -> str:
+        return f"https://huggingface.co/{self.repo}"
+
+
+# The pipeline we load. Everything else in REQUIRED_MODELS is a repo this
+# one pulls in when it initializes.
+DIARIZATION_PIPELINE = "pyannote/speaker-diarization-3.1"
+
+# Single source of truth: the pre-download pass, token validation, the
+# offline download patch and the Settings dialog all derive from this.
+REQUIRED_MODELS: tuple[ModelSpec, ...] = (
+    ModelSpec(DIARIZATION_PIPELINE, gated=True),
+    ModelSpec("pyannote/segmentation-3.0", gated=True),
+    ModelSpec("pyannote/speaker-diarization-community-1", gated=True),
+    ModelSpec("pyannote/wespeaker-voxceleb-resnet34-LM", gated=False),
+)
+
+# Gated repos raise 403 GatedRepoError on any network hit, even when the
+# files are already cached, so they need separate handling in a few places.
+GATED_MODELS: tuple[ModelSpec, ...] = tuple(m for m in REQUIRED_MODELS if m.gated)
+GATED_REPOS: frozenset[str] = frozenset(m.repo for m in GATED_MODELS)
+
+
 @dataclass
 class SpeakerTurn:
     """A segment of audio attributed to a speaker."""
@@ -121,43 +155,13 @@ def _ensure_models_downloaded(token: str, log: Callable[[str], None]):
     from huggingface_hub import snapshot_download, list_repo_files
     from huggingface_hub.utils import GatedRepoError
 
-    # Models required by pyannote/speaker-diarization-3.1
-    REQUIRED_MODELS = [
-        {
-            "repo": "pyannote/speaker-diarization-3.1",
-            "name": "speaker-diarization-3.1",
-            "url": "https://huggingface.co/pyannote/speaker-diarization-3.1",
-            "gated": True
-        },
-        {
-            "repo": "pyannote/segmentation-3.0",
-            "name": "segmentation-3.0",
-            "url": "https://huggingface.co/pyannote/segmentation-3.0",
-            "gated": True
-        },
-        {
-            "repo": "pyannote/speaker-diarization-community-1",
-            "name": "speaker-diarization-community-1",
-            "url": "https://huggingface.co/pyannote/speaker-diarization-community-1",
-            "gated": True
-        },
-        {
-            "repo": "pyannote/wespeaker-voxceleb-resnet34-LM",
-            "name": "wespeaker-voxceleb-resnet34-LM",
-            "url": "https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM",
-            "gated": False
-        },
-    ]
-
     # First, check access to gated models
     log("[Speaker ID: Verifying model access...]")
     missing_licenses = []
 
-    for model in REQUIRED_MODELS:
-        if not model["gated"]:
-            continue
+    for model in GATED_MODELS:
         try:
-            list_repo_files(model["repo"], token=token)
+            list_repo_files(model.repo, token=token)
         except GatedRepoError:
             missing_licenses.append(model)
         except Exception as e:
@@ -166,7 +170,7 @@ def _ensure_models_downloaded(token: str, log: Callable[[str], None]):
                 missing_licenses.append(model)
 
     if missing_licenses:
-        model_list = "\n".join([f"  - {m['name']}: {m['url']}" for m in missing_licenses])
+        model_list = "\n".join([f"  - {m.name}: {m.url}" for m in missing_licenses])
         raise RuntimeError(
             f"Accept the license for these models:\n{model_list}\n\n"
             f"Click 'Agree and access repository' on each page."
@@ -174,19 +178,19 @@ def _ensure_models_downloaded(token: str, log: Callable[[str], None]):
 
     # Download full snapshots with retry and cache verification
     for model in REQUIRED_MODELS:
-        repo_id = model["repo"]
+        repo_id = model.repo
 
         # First, verify existing cache
         cache_ok, cache_msg = _verify_model_cache(repo_id, token)
         if cache_ok:
-            log(f"[Speaker ID: {model['name']} - cache verified]")
+            log(f"[Speaker ID: {model.name} - cache verified]")
             continue
 
-        log(f"[Speaker ID: Downloading {model['name']} (with retry)...]")
+        log(f"[Speaker ID: Downloading {model.name} (with retry)...]")
 
         try:
             local_dir = _download_with_retry(repo_id, token, log, max_retries=3)
-            log(f"[Speaker ID: {model['name']} downloaded]")
+            log(f"[Speaker ID: {model.name} downloaded]")
 
             # Verify the download
             verify_ok, verify_msg = _verify_model_cache(repo_id, token)
@@ -196,7 +200,7 @@ def _ensure_models_downloaded(token: str, log: Callable[[str], None]):
             error_msg = str(e)
             for line in error_msg.splitlines() or [""]:
                 log(f"[Speaker ID: Download error: {line}]")
-            raise RuntimeError(f"Failed to download {model['name']}: {error_msg}")
+            raise RuntimeError(f"Failed to download {model.name}: {error_msg}")
 
     log("[Speaker ID: All models downloaded]")
 
@@ -216,14 +220,6 @@ def validate_hf_token(token: str) -> tuple[bool, str]:
 
     if not token.startswith("hf_"):
         return False, "Token should start with 'hf_'"
-
-    # Only these two models are gated and require license acceptance
-    # wespeaker-voxceleb-resnet34-LM is NOT gated
-    REQUIRED_MODELS = [
-        ("pyannote/speaker-diarization-3.1", "https://huggingface.co/pyannote/speaker-diarization-3.1"),
-        ("pyannote/segmentation-3.0", "https://huggingface.co/pyannote/segmentation-3.0"),
-        ("pyannote/speaker-diarization-community-1", "https://huggingface.co/pyannote/speaker-diarization-community-1"),
-    ]
 
     try:
         from huggingface_hub import HfApi, list_repo_files
@@ -245,20 +241,20 @@ def validate_hf_token(token: str) -> tuple[bool, str]:
         missing_licenses = []
         access_denied = []
 
-        for repo_id, url in REQUIRED_MODELS:
+        for model in GATED_MODELS:
             try:
-                list_repo_files(repo_id, token=token)
+                list_repo_files(model.repo, token=token)
             except GatedRepoError:
-                missing_licenses.append((repo_id.split("/")[1], url))
+                missing_licenses.append(model)
             except Exception as e:
                 error_str = str(e).lower()
                 if "403" in error_str or "401" in error_str or "gated" in error_str:
-                    missing_licenses.append((repo_id.split("/")[1], url))
+                    missing_licenses.append(model)
                 else:
-                    access_denied.append(repo_id.split("/")[1])
+                    access_denied.append(model.name)
 
         if missing_licenses:
-            links = "\n".join([f"  {name}: {url}" for name, url in missing_licenses])
+            links = "\n".join([f"  {m.name}: {m.url}" for m in missing_licenses])
             return False, (
                 f"Accept the license for these models:\n{links}\n\n"
                 "Click 'Agree and access repository' on each page."
@@ -345,15 +341,9 @@ def run_diarization(
         import huggingface_hub.file_download
         _original_hf_download = huggingface_hub.file_download.hf_hub_download
 
-        _GATED_REPOS = {
-            "pyannote/speaker-diarization-3.1",
-            "pyannote/segmentation-3.0",
-            "pyannote/speaker-diarization-community-1",
-        }
-
         def _offline_hf_download(*args, **kwargs):
             repo_id = args[0] if len(args) > 0 else kwargs.get('repo_id', '')
-            if repo_id in _GATED_REPOS:
+            if repo_id in GATED_REPOS:
                 kwargs['local_files_only'] = True
                 kwargs.pop('force_download', None)
             return _original_hf_download(*args, **kwargs)
@@ -375,7 +365,7 @@ def run_diarization(
                 mod_dict['hf_hub_download'] = _offline_hf_download
 
         pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
+            DIARIZATION_PIPELINE,
             token=hf_token
         )
         log("[Speaker ID: Pipeline loaded successfully]")

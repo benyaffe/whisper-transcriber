@@ -86,14 +86,20 @@ class SettingsDialog(QDialog):
         self.token_widget = QGroupBox("HuggingFace Token")
         token_layout = QVBoxLayout(self.token_widget)
 
-        # Requirements
+        # Requirements. The gated-model list is derived from the same
+        # constant the downloader and token validator use, so the links
+        # here cannot drift out of sync with what we actually check.
+        from src.core.diarization import GATED_MODELS
+
+        model_links = "".join(
+            f"&nbsp;&nbsp;&nbsp;- <a href='{m.url}'>{m.repo}</a><br>"
+            for m in GATED_MODELS
+        )
         req_label = QLabel(
             "<b>Requirements:</b><br>"
             "1. Create a free account at <a href='https://huggingface.co/join'>huggingface.co</a><br>"
-            "2. Accept the license for <b>all three</b> required models:<br>"
-            "&nbsp;&nbsp;&nbsp;- <a href='https://huggingface.co/pyannote/speaker-diarization-3.1'>pyannote/speaker-diarization-3.1</a><br>"
-            "&nbsp;&nbsp;&nbsp;- <a href='https://huggingface.co/pyannote/segmentation-3.0'>pyannote/segmentation-3.0</a><br>"
-            "&nbsp;&nbsp;&nbsp;- <a href='https://huggingface.co/pyannote/speaker-diarization-community-1'>pyannote/speaker-diarization-community-1</a><br>"
+            f"2. Accept the license for <b>all {len(GATED_MODELS)}</b> required models:<br>"
+            f"{model_links}"
             "3. Create an access token at <a href='https://huggingface.co/settings/tokens'>Settings &gt; Access Tokens</a><br>"
             "<br>"
             "<b>Token permissions:</b> Read access to gated repos (select 'Read' when creating)"

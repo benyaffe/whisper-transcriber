@@ -66,6 +66,10 @@ Identifies different speakers in your audio using pyannote.audio. Requires a fre
 3. Create an access token at [Settings > Access Tokens](https://huggingface.co/settings/tokens) with **Read** permission
 4. Enter the token in the app's Settings dialog
 
+The app derives this list at runtime from `REQUIRED_MODELS` in
+[`src/core/diarization.py`](src/core/diarization.py), which is the source of truth. This section is
+the one hand-maintained copy; update it if that constant changes.
+
 ## Model Selection
 
 Starts with `medium` model. If confidence is low after 120 seconds, automatically restarts with `large` model.
