@@ -33,14 +33,15 @@ python main.py
 ## Building the App Bundle
 
 ```bash
-# Development build (uses system Python)
-python setup.py py2app -A
-
-# Production build (standalone)
-python setup.py py2app
+# Builds the .app with PyInstaller and packages it into a DMG.
+# Requires an existing venv with requirements.txt installed, plus create-dmg.
+./build.sh
 
 # App will be in dist/Whisper Transcriber.app
 ```
+
+The build is driven entirely by `WhisperTranscriber.spec`. The DMG is not code-signed or notarized,
+so first launch needs a right-click > Open to get past Gatekeeper.
 
 ## Usage
 
