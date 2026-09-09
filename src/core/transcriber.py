@@ -114,6 +114,7 @@ class TranscriptionWorker(QThread):
 
     # Signals
     progress = pyqtSignal(float, int)  # percent, eta_seconds
+    diarization_progress = pyqtSignal(float, str)  # overall percent, stage label
     status_message = pyqtSignal(str)  # status updates (rendered as gray italic)
     segment_ready = pyqtSignal(float, float, str, str)  # start, end, text, speaker
     language_detected = pyqtSignal(str, float)  # language, confidence
@@ -132,6 +133,12 @@ class TranscriptionWorker(QThread):
     # Watchdog: timeout if no progress for this many seconds
     SEGMENT_TIMEOUT = 300  # 5 minutes
 
+    # When speaker ID is going to run, transcription only owns the bar up to
+    # here and diarization owns the rest. Diarization on a long recording can
+    # take as long as transcription, and the old 95-to-100 allocation gave it
+    # five integer steps of a 0-100 QProgressBar, which reads as frozen.
+    TRANSCRIBE_CEILING_WITH_DIARIZATION = 70.0
+
     def __init__(self, filepath: str, initial_model: str = "medium", language: Optional[str] = None):
         super().__init__()
         self.filepath = filepath
@@ -143,6 +150,7 @@ class TranscriptionWorker(QThread):
         self._logger = get_logger()
         self.audio_path: Optional[str] = None
         self._temp_audio = False
+        self._will_diarize = False
 
     def run(self):
         try:
@@ -164,6 +172,13 @@ class TranscriptionWorker(QThread):
 
         # Track if speaker ID was successfully used (for VTT output)
         self._speaker_id_used = False
+
+        # Decide up front whether speaker ID will run, so the progress bar can
+        # reserve room for it rather than discovering it at 95%.
+        self._will_diarize, _, _ = self._diarization_preflight()
+        progress_ceiling = (
+            self.TRANSCRIBE_CEILING_WITH_DIARIZATION if self._will_diarize else 100.0
+        )
 
         # Step 1: Hardware detection
         device, compute_type, hw_desc = detect_optimal_settings()
@@ -247,7 +262,7 @@ class TranscriptionWorker(QThread):
 
             # Progress
             if total_duration > 0:
-                percent = (segment.end / total_duration) * 100
+                percent = (segment.end / total_duration) * progress_ceiling
                 elapsed = time.time() - start_time
                 if segment.end > 0:
                     rate = elapsed / segment.end
@@ -289,7 +304,10 @@ class TranscriptionWorker(QThread):
         # Step 6: Speaker diarization
         if self._cancelled:
             return
-        self.progress.emit(95, -1)
+        if self._will_diarize:
+            self.diarization_progress.emit(
+                self.TRANSCRIBE_CEILING_WITH_DIARIZATION, "Loading speaker model"
+            )
         self._run_diarization()
 
         # Step 7: Save outputs
@@ -320,19 +338,28 @@ class TranscriptionWorker(QThread):
         self._temp_audio = True
         return dst
 
-    def _run_diarization(self):
-        """Run speaker diarization and assign speakers to segments."""
-        # Check if speaker ID is enabled
-        if not is_speaker_id_enabled():
-            self.status_message.emit("[Speaker ID: Disabled]")
-            # Don't assign speakers - leave them as None for VTT output
-            self._speaker_id_used = False
-            return
+    def _diarization_preflight(self) -> tuple[bool, str, str]:
+        """Decide whether diarization will run, before transcription starts.
 
-        # Get HF token
+        Returns (will_run, hf_token, reason). Called up front so the progress
+        bar knows whether to reserve room for the speaker-ID phase, and again
+        by _run_diarization so the decision is made in exactly one place.
+        """
+        if not is_speaker_id_enabled():
+            return False, "", "[Speaker ID: Disabled]"
+
         hf_token = get_hf_token()
         if not hf_token:
-            self.status_message.emit("[Speaker ID: No token configured - see Settings]")
+            return False, "", "[Speaker ID: No token configured - see Settings]"
+
+        return True, hf_token, ""
+
+    def _run_diarization(self):
+        """Run speaker diarization and assign speakers to segments."""
+        will_run, hf_token, reason = self._diarization_preflight()
+        if not will_run:
+            self.status_message.emit(reason)
+            # Don't assign speakers - leave them as None for VTT output
             self._speaker_id_used = False
             return
 
@@ -340,12 +367,20 @@ class TranscriptionWorker(QThread):
         def status_cb(msg: str):
             self.status_message.emit(msg)
 
+        # Map the hook's 0.0-1.0 onto the slice of the bar we reserved.
+        span = 100.0 - self.TRANSCRIBE_CEILING_WITH_DIARIZATION
+
+        def progress_cb(fraction: float, stage_label: str):
+            percent = self.TRANSCRIBE_CEILING_WITH_DIARIZATION + fraction * span
+            self.diarization_progress.emit(percent, stage_label)
+
         try:
             self.status_message.emit("[Speaker ID: Starting...]")
             turns = run_diarization(
                 self.audio_path,
                 hf_token,
-                status_callback=status_cb
+                status_callback=status_cb,
+                progress_callback=progress_cb
             )
 
             if not turns:

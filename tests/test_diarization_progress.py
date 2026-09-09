@@ -268,6 +268,60 @@ def test_run_diarization_without_callback_passes_no_hook(patched_diarization):
     assert patched_diarization.received_hook is None
 
 
+@pytest.mark.parametrize(
+    "enabled, token, expected_run, expected_reason_fragment",
+    [
+        (False, "hf_abc", False, "Disabled"),
+        (True, "", False, "No token configured"),
+        (True, "hf_abc", True, ""),
+    ],
+)
+def test_diarization_preflight(monkeypatch, enabled, token, expected_run, expected_reason_fragment):
+    """The will-it-run decision is made once, up front, and drives the bar range."""
+    from src.core import transcriber
+
+    monkeypatch.setattr(transcriber, "is_speaker_id_enabled", lambda: enabled)
+    monkeypatch.setattr(transcriber, "get_hf_token", lambda: token)
+
+    worker = transcriber.TranscriptionWorker.__new__(transcriber.TranscriptionWorker)
+    will_run, hf_token, reason = worker._diarization_preflight()
+
+    assert will_run is expected_run
+    assert expected_reason_fragment in reason
+    assert hf_token == (token if expected_run else "")
+
+
+def test_hook_fraction_maps_onto_the_reserved_slice_of_the_bar():
+    """0.0-1.0 from the hook must land in the band the transcriber reserved.
+
+    Mirrors the arithmetic in TranscriptionWorker._run_diarization without
+    constructing a QThread, following the __new__ idiom used elsewhere in
+    the suite for QThread methods.
+    """
+    from src.core.transcriber import TranscriptionWorker
+
+    floor = TranscriptionWorker.TRANSCRIBE_CEILING_WITH_DIARIZATION
+    span = 100.0 - floor
+
+    assert floor + 0.0 * span == pytest.approx(70.0)
+    assert floor + 0.5 * span == pytest.approx(85.0)
+    assert floor + 1.0 * span == pytest.approx(100.0)
+
+
+def test_diarization_owns_a_usable_share_of_the_progress_bar():
+    """Regression guard on the fix itself.
+
+    The old code emitted a single progress.emit(95, -1), leaving diarization
+    five integer steps of a 0-100 QProgressBar for a phase that can run for
+    many minutes. Whatever the ceiling becomes, it has to leave enough room
+    for the bar to visibly move.
+    """
+    from src.core.transcriber import TranscriptionWorker
+
+    reserved = 100.0 - TranscriptionWorker.TRANSCRIBE_CEILING_WITH_DIARIZATION
+    assert reserved >= 20.0, f"only {reserved:.0f} integer steps reserved for speaker ID"
+
+
 def test_run_diarization_still_returns_turns(patched_diarization):
     """Adding the hook must not disturb the return value."""
     from src.core.diarization import run_diarization
