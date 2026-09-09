@@ -36,7 +36,8 @@ fi
 
 # Create styled DMG
 echo "Creating DMG..."
-DMG_NAME="WhisperTranscriber-1.0.2.dmg"
+VERSION=$(tr -d '[:space:]' < VERSION)
+DMG_NAME="WhisperTranscriber-${VERSION}.dmg"
 rm -f "$DMG_NAME"
 
 create-dmg \

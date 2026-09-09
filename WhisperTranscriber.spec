@@ -14,6 +14,10 @@ resources_dir = os.path.join(project_dir, 'resources')
 ffmpeg_dir = os.path.join(resources_dir, 'ffmpeg')
 venv_dir = os.path.join(project_dir, 'venv')
 
+# Single source of truth for the release version, shared with build.sh.
+with open(os.path.join(project_dir, 'VERSION'), encoding='utf-8') as _vf:
+    APP_VERSION = _vf.read().strip()
+
 # Find faster_whisper assets (contains silero VAD model)
 import glob
 faster_whisper_assets = glob.glob(os.path.join(venv_dir, 'lib', 'python*', 'site-packages', 'faster_whisper', 'assets'))
@@ -190,8 +194,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Whisper Transcriber',
         'CFBundleDisplayName': 'Whisper Transcriber',
-        'CFBundleVersion': '1.0.2',
-        'CFBundleShortVersionString': '1.0.2',
+        'CFBundleVersion': APP_VERSION,
+        'CFBundleShortVersionString': APP_VERSION,
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.15',
         # Prevent respawning on quit
