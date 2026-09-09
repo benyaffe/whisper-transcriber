@@ -4,6 +4,7 @@ Requires HuggingFace token with read access to gated repos.
 """
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Optional, Callable
 
@@ -48,6 +49,132 @@ class SpeakerTurn:
     start: float
     end: float
     speaker: str
+
+
+# Fraction of the diarization phase each pyannote step accounts for, in the
+# order pyannote runs them. Only "segmentation" and "embeddings" report
+# incremental completed/total; the other two fire once when they finish, so
+# they get a token weight rather than a share proportional to their runtime.
+# Clustering runs unhooked between "embeddings" and "discrete_diarization",
+# which is why the bar legitimately pauses there.
+DIARIZATION_STAGE_WEIGHTS: dict[str, float] = {
+    "segmentation": 0.45,
+    "speaker_counting": 0.05,
+    "embeddings": 0.45,
+    "discrete_diarization": 0.05,
+}
+
+DIARIZATION_STAGE_LABELS: dict[str, str] = {
+    "segmentation": "Finding speech",
+    "speaker_counting": "Counting speakers",
+    "embeddings": "Analyzing voices",
+    "discrete_diarization": "Assigning speakers",
+}
+
+
+class DiarizationProgressHook:
+    """Reports diarization progress to a callback as (fraction, label).
+
+    Implements pyannote's hook contract, which is just a callable taking
+    ``(step_name, step_artifact, file=None, total=None, completed=None)``.
+
+    Deliberately *not* a subclass of pyannote's own ``ProgressHook``: that one
+    is a ``rich`` terminal renderer that starts a live progress display on
+    stdout, which is meaningless in a windowed .app whose stdout may not be a
+    tty, and would pull ``rich`` into the bundle for no benefit.
+
+    Emission is throttled to ``min_interval_s`` because the embeddings step
+    fires once per batch, thousands of times on a long recording. Step
+    changes and step completions always emit, so a caller never misses a
+    transition or a finished stage.
+
+    ``clock`` is injectable so tests can exercise the throttle without
+    sleeping.
+    """
+
+    def __init__(
+        self,
+        progress_callback: Callable[[float, str], None],
+        min_interval_s: float = 0.5,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._callback = progress_callback
+        self._min_interval = min_interval_s
+        self._clock = clock
+        self._completed_steps: set[str] = set()
+        self._current_step: Optional[str] = None
+        self._last_emit_at = float("-inf")
+        self._last_fraction = 0.0
+
+    # Context-manager protocol, so this can be used the same way pyannote's
+    # own hooks are: `with DiarizationProgressHook(cb) as h: pipeline(f, hook=h)`
+    def __enter__(self) -> "DiarizationProgressHook":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def __call__(
+        self,
+        step_name: str,
+        step_artifact=None,
+        file=None,
+        total: Optional[int] = None,
+        completed: Optional[int] = None,
+    ):
+        step_changed = step_name != self._current_step
+        self._current_step = step_name
+
+        if completed is None or not total or total <= 0:
+            # A one-shot tick: pyannote calls these once, when the step is done.
+            step_fraction = 1.0
+        else:
+            # Inference reports completed = c + batch_size, which overshoots
+            # total on the final batch. Belt and braces: the `finished` branch
+            # below is what actually stops an overshoot reaching the bar, since
+            # it routes the step through _completed_steps at its full weight.
+            step_fraction = min(max(completed / total, 0.0), 1.0)
+
+        finished = step_fraction >= 1.0
+        if finished:
+            self._completed_steps.add(step_name)
+
+        if not (step_changed or finished or self._throttle_expired()):
+            return
+
+        # pyannote revisits a step (segmentation ticks, then completes), and an
+        # unknown future step contributes no weight. Never let the bar retreat.
+        fraction = max(self._overall_fraction(step_name, step_fraction), self._last_fraction)
+
+        self._last_emit_at = self._clock()
+        self._last_fraction = fraction
+        self._callback(fraction, self._label(step_name, total, completed))
+
+    def _throttle_expired(self) -> bool:
+        return (self._clock() - self._last_emit_at) >= self._min_interval
+
+    def _overall_fraction(self, step_name: str, step_fraction: float) -> float:
+        """Weighted progress across all stages, in [0.0, 1.0].
+
+        An unrecognised step_name contributes nothing, so a future pyannote
+        adding a stage cannot push the total past 1.0.
+        """
+        total = 0.0
+        for name, weight in DIARIZATION_STAGE_WEIGHTS.items():
+            if name in self._completed_steps:
+                total += weight
+            elif name == step_name:
+                total += weight * step_fraction
+        return min(total, 1.0)
+
+    def _label(self, step_name: str, total: Optional[int], completed: Optional[int]) -> str:
+        label = DIARIZATION_STAGE_LABELS.get(step_name)
+        if label is None:
+            # Unknown step from a future pyannote: surface it rather than hide it.
+            label = step_name.replace("_", " ").capitalize()
+        if completed is not None and total:
+            return f"{label} {min(completed, total)}/{total}"
+        return label
 
 
 class DiarizationError(Exception):
