@@ -151,8 +151,12 @@ class TranscriptionWorker(QThread):
             self._logger.info("Transcription completed successfully")
         except Exception as e:
             if not self._cancelled:
+                import traceback
                 log_exception(e, "transcription")
-                self.error.emit(str(e))
+                self.status_message.emit(f"[Error: {type(e).__name__}: {e}]")
+                for line in traceback.format_exc().rstrip().splitlines():
+                    self.status_message.emit(f"[  {line}]")
+                self.error.emit(f"{type(e).__name__}: {e}")
 
     def _transcribe(self):
         """Main transcription workflow."""
@@ -295,12 +299,26 @@ class TranscriptionWorker(QThread):
         self.completed.emit(vtt_path, txt_path, self.audio_path)
 
     def _prepare_audio(self) -> str:
-        """Extract audio from video if needed."""
+        """Extract audio from video if needed; otherwise snapshot the
+        source to a stable temp path so the pipeline survives the source
+        being moved or deleted mid-run (folder watchers, archival scripts)."""
         info = get_file_info(self.filepath)
         if info.get('has_video') and info.get('has_audio'):
             self._temp_audio = True
             return extract_audio(self.filepath)
-        return self.filepath
+        return self._snapshot_audio(self.filepath)
+
+    def _snapshot_audio(self, src: str) -> str:
+        import tempfile
+        import shutil
+        tmp_dir = tempfile.mkdtemp(prefix='wt_source_')
+        dst = os.path.join(tmp_dir, os.path.basename(src))
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copyfile(src, dst)
+        self._temp_audio = True
+        return dst
 
     def _run_diarization(self):
         """Run speaker diarization and assign speakers to segments."""
@@ -342,15 +360,20 @@ class TranscriptionWorker(QThread):
             self.status_message.emit(f"[Speaker ID complete: {len(speaker_map)} speaker(s), {assigned}/{len(self.segments)} segments tagged]")
 
         except TokenValidationError as e:
-            self.status_message.emit(f"[Speaker ID: Token error - {str(e)[:40]}]")
+            for line in str(e).splitlines() or [""]:
+                self.status_message.emit(f"[Speaker ID: Token error - {line}]")
             self._speaker_id_used = False
 
         except DiarizationError as e:
-            self.status_message.emit(f"[Speaker ID failed: {str(e)[:40]}]")
+            for line in str(e).splitlines() or [""]:
+                self.status_message.emit(f"[Speaker ID failed: {line}]")
             self._speaker_id_used = False
 
         except Exception as e:
-            self.status_message.emit(f"[Speaker ID error: {str(e)[:40]}]")
+            import traceback
+            self.status_message.emit(f"[Speaker ID error: {type(e).__name__}: {e}]")
+            for line in traceback.format_exc().rstrip().splitlines():
+                self.status_message.emit(f"[  {line}]")
             self._speaker_id_used = False
 
     def _assess_quality(self) -> QualityMetrics:

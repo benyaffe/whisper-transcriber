@@ -26,6 +26,36 @@ class TokenValidationError(Exception):
     pass
 
 
+def _decode_audio_to_tensor(path: str, sample_rate: int = 16000):
+    """Decode audio to a (1, N) float32 torch tensor via the bundled ffmpeg.
+
+    Bypasses pyannote's torchcodec-based loader, which cannot dlopen FFmpeg's
+    shared libraries inside the PyInstaller bundle (we ship a static ffmpeg
+    binary, not the libav* dylibs torchcodec expects).
+    """
+    import subprocess
+    import numpy as np
+    import torch
+    from src.utils.file_utils import get_bundled_binary
+
+    ffmpeg = get_bundled_binary('ffmpeg')
+    cmd = [
+        ffmpeg, '-nostdin', '-loglevel', 'error',
+        '-i', path,
+        '-vn', '-ac', '1', '-ar', str(sample_rate),
+        '-f', 'f32le', '-',
+    ]
+    result = subprocess.run(cmd, capture_output=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.decode('utf-8', errors='replace').strip()
+        raise DiarizationError(f"ffmpeg decode failed: {stderr}")
+    if not result.stdout:
+        raise DiarizationError("ffmpeg produced no audio data")
+
+    samples = np.frombuffer(result.stdout, dtype=np.float32)
+    return torch.from_numpy(samples.copy()).unsqueeze(0)
+
+
 def _download_with_retry(repo_id: str, token: str, log: Callable[[str], None], max_retries: int = 3):
     """
     Download a model with exponential backoff retry.
@@ -52,7 +82,7 @@ def _download_with_retry(repo_id: str, token: str, log: Callable[[str], None], m
                 log(f"[Speaker ID: Download failed, retrying in {delay}s... ({error_str[:40]})]")
                 time.sleep(delay)
             else:
-                raise RuntimeError(f"Download failed after {max_retries} attempts: {error_str[:60]}")
+                raise RuntimeError(f"Download failed after {max_retries} attempts: {error_str}")
 
 
 def _verify_model_cache(repo_id: str, token: str) -> tuple[bool, str]:
@@ -164,8 +194,9 @@ def _ensure_models_downloaded(token: str, log: Callable[[str], None]):
                 log(f"[Speaker ID: Warning - {verify_msg}]")
         except Exception as e:
             error_msg = str(e)
-            log(f"[Speaker ID: Download error: {error_msg[:80]}]")
-            raise RuntimeError(f"Failed to download {model['name']}: {error_msg[:80]}")
+            for line in error_msg.splitlines() or [""]:
+                log(f"[Speaker ID: Download error: {line}]")
+            raise RuntimeError(f"Failed to download {model['name']}: {error_msg}")
 
     log("[Speaker ID: All models downloaded]")
 
@@ -299,7 +330,7 @@ def run_diarization(
     try:
         _ensure_models_downloaded(hf_token, log)
     except Exception as e:
-        raise DiarizationError(f"Failed to download models: {str(e)[:80]}")
+        raise DiarizationError(f"Failed to download models: {e}")
 
     log("[Speaker ID: Loading pipeline...]")
 
@@ -330,12 +361,18 @@ def run_diarization(
         # Patch in the source module and top-level module
         huggingface_hub.file_download.hf_hub_download = _offline_hf_download
         huggingface_hub.hf_hub_download = _offline_hf_download
-        # Patch in any module that already imported hf_hub_download
+        # Patch in any module that already imported hf_hub_download.
+        # Use vars() to avoid triggering __getattr__ on lazy modules
+        # (e.g. speechbrain.integrations.k2_fsa raises ImportError on access).
         for mod_name, mod in list(sys.modules.items()):
-            if (mod is not None
-                and hasattr(mod, 'hf_hub_download')
-                and getattr(mod, 'hf_hub_download') is _original_hf_download):
-                setattr(mod, 'hf_hub_download', _offline_hf_download)
+            if mod is None:
+                continue
+            try:
+                mod_dict = vars(mod)
+            except TypeError:
+                continue
+            if mod_dict.get('hf_hub_download') is _original_hf_download:
+                mod_dict['hf_hub_download'] = _offline_hf_download
 
         try:
             pipeline = Pipeline.from_pretrained(
@@ -357,19 +394,27 @@ def run_diarization(
             f"Try clearing cache: rm -rf ~/.cache/huggingface/hub/models--pyannote*"
         )
     except Exception as e:
+        import traceback
         error_str = str(e)
         error_type = type(e).__name__
-        log(f"[Speaker ID: {error_type}: {error_str[:100]}]")
-        raise DiarizationError(f"Pipeline load failed ({error_type}): {error_str[:120]}")
+        log(f"[Speaker ID: {error_type}: {error_str}]")
+        for line in traceback.format_exc().rstrip().splitlines():
+            log(f"[  {line}]")
+        raise DiarizationError(f"Pipeline load failed ({error_type}): {error_str}")
     finally:
-        # Restore original hf_hub_download and get_plda
+        # Restore original hf_hub_download. Use vars() to avoid triggering
+        # __getattr__ on lazy modules (e.g. speechbrain lazy k2 integration).
         huggingface_hub.file_download.hf_hub_download = _original_hf_download
         huggingface_hub.hf_hub_download = _original_hf_download
         for mod_name, mod in list(sys.modules.items()):
-            if (mod is not None
-                and hasattr(mod, 'hf_hub_download')
-                and getattr(mod, 'hf_hub_download') is _offline_hf_download):
-                setattr(mod, 'hf_hub_download', _original_hf_download)
+            if mod is None:
+                continue
+            try:
+                mod_dict = vars(mod)
+            except TypeError:
+                continue
+            if mod_dict.get('hf_hub_download') is _offline_hf_download:
+                mod_dict['hf_hub_download'] = _original_hf_download
 
     # Use GPU if available
     device = "cpu"
@@ -387,16 +432,23 @@ def run_diarization(
     log("[Speaker ID: Analyzing speakers...]")
 
     try:
-        log(f"[Speaker ID: Running on {audio_path}]")
-        diarization = pipeline(audio_path)
+        from pathlib import Path
+        log(f"[Speaker ID: Decoding audio via bundled ffmpeg...]")
+        waveform = _decode_audio_to_tensor(audio_path, sample_rate=16000)
+        log(f"[Speaker ID: Decoded {waveform.shape[1] / 16000:.1f}s of audio]")
+        log(f"[Speaker ID: Running diarization pipeline...]")
+        diarization = pipeline({
+            "waveform": waveform,
+            "sample_rate": 16000,
+            "uri": Path(audio_path).stem,
+        })
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         log(f"[Speaker ID: Diarization error details:]")
-        # Log each line of traceback for visibility
-        for line in tb.strip().split('\n')[-6:]:
-            log(f"[  {line.strip()[:120]}]")
-        raise DiarizationError(f"Diarization failed: {str(e)[:100]}")
+        for line in tb.rstrip().splitlines():
+            log(f"[  {line}]")
+        raise DiarizationError(f"Diarization failed: {e}")
 
     # pyannote 4.x returns DiarizeOutput; extract the Annotation
     annotation = diarization
