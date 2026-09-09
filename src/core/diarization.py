@@ -374,16 +374,10 @@ def run_diarization(
             if mod_dict.get('hf_hub_download') is _original_hf_download:
                 mod_dict['hf_hub_download'] = _offline_hf_download
 
-        try:
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                token=hf_token
-            )
-        except TypeError:
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token
-            )
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            token=hf_token
+        )
         log("[Speaker ID: Pipeline loaded successfully]")
     except FileNotFoundError as e:
         error_str = str(e)
