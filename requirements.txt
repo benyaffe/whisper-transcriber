@@ -15,7 +15,9 @@ torchaudio>=2.0.0
 huggingface_hub>=0.20.0
 
 # Speaker diarization (optional, requires HF token)
-pyannote.audio>=3.1.0
+# 4.x only: diarization.py unwraps the 4.x DiarizeOutput and passes
+# hook=/waveform dicts that 3.x does not accept.
+pyannote.audio>=4.0.0,<5.0.0
 
 # Video downloads
 yt-dlp>=2024.1.0
