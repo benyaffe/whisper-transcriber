@@ -96,6 +96,7 @@ class QueueItem(QListWidgetItem):
         self.is_url = is_url
         self.status = "pending"
         self.audio_path = None
+        self.json_path = None
         self.update_display()
 
     def update_display(self):
@@ -822,6 +823,7 @@ class MainWindow(QMainWindow):
         if self.current_item:
             self.current_item.status = "completed"
             self.current_item.audio_path = audio_path
+            self.current_item.json_path = json_path
             self.current_item.update_display()
 
         self.progress_bar.setValue(100)
@@ -830,6 +832,14 @@ class MainWindow(QMainWindow):
 
         if audio_path and audio_path != self.current_audio_path:
             self._load_audio(audio_path)
+
+        # Name the machine-readable output in the transcript pane. Only the
+        # VTT is opened; the JSON is for other tools, not for reading here.
+        if json_path and os.path.exists(json_path):
+            size_kb = os.path.getsize(json_path) / 1024
+            self._on_status_message(
+                f"[Saved {os.path.basename(json_path)} ({size_kb:.0f} KB)]"
+            )
 
         subprocess.run(["open", vtt_path], check=False)
         self.process_next()
