@@ -147,4 +147,4 @@ class TranscriptionWorker(QThread):
         yields, so it cannot notice faster-whisper wedged inside a blocking
         call. A caller with an event loop can poll this to spot that case.
         """
-        return time.time() - self.runner.last_segment_time
+        return time.monotonic() - self.runner.last_segment_time

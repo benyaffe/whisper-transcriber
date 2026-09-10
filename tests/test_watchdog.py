@@ -5,9 +5,10 @@ It is not a hang detector and the tests say so. It only runs when the segment
 generator yields, so it reports a gap between two segments after the fact. A
 genuinely wedged blocking call never reaches it.
 
-What it *was* doing wrong: the clock started in __init__, so a slow model load
-or a first-run model download counted against the timeout and killed the run
-before the first segment was ever attempted.
+Two things it was doing wrong. The clock started in __init__, so a slow model
+load or a first-run model download counted against the timeout and killed the
+run before the first segment was attempted. And it measured wall clock, so a
+Mac that went to sleep mid-transcription looked identical to a wedged one.
 
 Run with: python -m pytest tests/test_watchdog.py -v
 """
@@ -37,7 +38,7 @@ def build_worker(monkeypatch, segments, *, model_load_seconds=0.0):
     from src.core import runner as tmod
 
     clock = {"now": 1000.0}
-    monkeypatch.setattr(tmod.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(tmod.time, "monotonic", lambda: clock["now"])
 
     worker = TranscriptionRunner("/tmp/x.m4a", model="medium", language="english")
 
@@ -290,3 +291,73 @@ def test_watch_stops_itself_when_the_trip_finishes(qt_app):
         assert not window._stall_timer.isActive()
     finally:
         window.close()
+
+
+# --- the machine going to sleep -----------------------------------------------
+
+
+def test_a_sleeping_mac_is_not_a_stalled_transcription(monkeypatch):
+    """The failure this actually hit.
+
+    A 42-minute trip died with "stalled for 15 minutes". The power log showed
+    863 seconds of Maintenance Sleep inside an 875 second gap, and a rerun
+    reached its first segment in 14 seconds. Nothing was wrong with the run.
+
+    time.monotonic() does not advance while macOS is asleep; time.time() does.
+    Measuring elapsed work with wall clock therefore counts the nap. Here the
+    wall clock jumps a quarter of an hour and the monotonic clock does not,
+    which is exactly what a sleep looks like from inside the process.
+    """
+    from types import SimpleNamespace
+
+    import faster_whisper
+
+    from src.core import runner as tmod
+
+    worker, clock = build_worker(monkeypatch, [])
+    wall = {"now": 1000.0}
+    monkeypatch.setattr(tmod.time, "time", lambda: wall["now"])
+
+    def napping_segments():
+        for i in range(4):
+            if i == 1:
+                # A quarter of an hour of Maintenance Sleep between the first
+                # and second segments. Wall clock notices; monotonic does not.
+                wall["now"] += 900
+            yield fake_segment(i * 5.0, (i + 1) * 5.0)
+
+    class FakeModel:
+        def __init__(self, *a, **k):
+            pass
+
+        def transcribe(self, *a, **k):
+            return napping_segments(), SimpleNamespace(
+                language="en", language_probability=0.99
+            )
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
+
+    worker._transcribe()  # must not raise
+
+    assert len(worker.segments) == 4
+
+
+def test_the_stall_check_uses_monotonic_not_wall_clock():
+    """Pin the fix, since the behavioural test above cannot force a real sleep."""
+    import ast
+    import inspect
+    import textwrap
+
+    from src.core import runner
+
+    source = textwrap.dedent(inspect.getsource(runner.TranscriptionRunner._transcribe))
+    calls = {
+        f"{node.func.value.id}.{node.func.attr}"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+    }
+
+    assert "time.monotonic" in calls
+    assert "time.time" not in calls, "wall clock counts time the machine spent asleep"

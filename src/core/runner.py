@@ -265,7 +265,7 @@ class TranscriptionRunner:
         # Initialized here rather than at the top of run(), so that any caller
         # reaching _save_outputs cannot hit an AttributeError.
         self._speaker_id_used = False
-        self._last_segment_time = time.time()
+        self._last_segment_time = time.monotonic()
 
     # --- public API -----------------------------------------------------------
 
@@ -360,7 +360,7 @@ class TranscriptionRunner:
         obs.language_detected(trans_info.language, trans_info.language_probability)
 
         # Process segments
-        start_time = time.time()
+        start_time = time.monotonic()
         assessed = False
 
         # Start the stall clock here, not in the constructor. Everything above
@@ -368,7 +368,14 @@ class TranscriptionRunner:
         # extraction -- can easily take longer than SEGMENT_TIMEOUT, and the
         # clock used to be running throughout, so a slow start killed the run
         # with "appears stuck" before a single segment had been attempted.
-        self._last_segment_time = time.time()
+        #
+        # monotonic, not time(): on macOS time.monotonic() does not advance
+        # while the machine is asleep, and wall clock does. A laptop that naps
+        # for fifteen minutes mid-transcription would otherwise look exactly
+        # like a wedged one. That is not hypothetical; it killed a 42-minute
+        # run during testing, and the log showed 863 seconds of Maintenance
+        # Sleep against an 875 second "stall".
+        self._last_segment_time = time.monotonic()
 
         for segment in segments_gen:
             if self.cancelled:
@@ -379,7 +386,7 @@ class TranscriptionRunner:
             # after the fact. It cannot fire while faster-whisper is genuinely
             # wedged inside a blocking call, because then we never get here.
             # The Qt wrapper watches last_segment_time for that case.
-            now = time.time()
+            now = time.monotonic()
             gap = now - self._last_segment_time
             if gap > self.SEGMENT_TIMEOUT:
                 self._logger.error(f"Watchdog: {gap:.0f}s gap between segments")
@@ -423,7 +430,7 @@ class TranscriptionRunner:
                 ceiling_measured = True
                 self._progress_ceiling = self._estimate_progress_ceiling(
                     audio_duration=total_duration,
-                    elapsed=time.time() - start_time,
+                    elapsed=time.monotonic() - start_time,
                     audio_done=segment.end,
                     device=diarization_device,
                 )
@@ -436,7 +443,7 @@ class TranscriptionRunner:
             # Progress
             if total_duration > 0:
                 percent = (segment.end / total_duration) * self._progress_ceiling
-                elapsed = time.time() - start_time
+                elapsed = time.monotonic() - start_time
                 if segment.end > 0:
                     rate = elapsed / segment.end
                     remaining = (total_duration - segment.end) * rate

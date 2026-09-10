@@ -85,7 +85,7 @@ class TripWorker(QThread):
 
         if self._runner is None:
             return 0.0
-        return time.time() - self._runner.last_segment_time
+        return time.monotonic() - self._runner.last_segment_time
 
     def run(self):
         try:
