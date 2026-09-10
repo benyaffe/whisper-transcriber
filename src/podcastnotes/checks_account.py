@@ -67,6 +67,13 @@ def check_claude():
 
     try:
         reply = llm.probe(project=project)
+    except llm.UnsupportedRegion as e:
+        return failed(
+            f"The Claude location is set to {e.region}, which does not carry "
+            f"the model this app uses.",
+            remedy="Set it to global, or to us or eu if your data has to stay "
+                   "in one of those.",
+        )
     except llm.ClaudeNotEnabled as e:
         return failed(
             f"Claude is not switched on in project {e.project}.",

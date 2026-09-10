@@ -153,19 +153,64 @@ def test_vertex_model_ids_follow_the_vertex_convention():
 
 
 def test_the_default_endpoint_is_global(monkeypatch):
-    """Cheaper, fails over on capacity, and does not care which region a
-    colleague's project happens to live in."""
+    """Not a preference. Opus 5 is not served from single-region endpoints, so
+    a pinned region makes the model this product depends on unavailable."""
     assert llm.DEFAULT_REGION == "global"
 
 
-def test_a_region_can_be_pinned_for_data_residency(monkeypatch):
+def test_only_endpoints_that_carry_current_models_are_supported():
+    """us and eu are the multi-region endpoints, which do carry them. Anything
+    with a dash in it is a single region, which does not."""
+    assert set(llm.SUPPORTED_REGIONS) == {"global", "us", "eu"}
+    assert not any("-" in r for r in llm.SUPPORTED_REGIONS)
+
+
+def test_a_multi_region_endpoint_can_be_chosen_for_data_residency(monkeypatch):
     """Anybody who does need residency has to be able to say so."""
     monkeypatch.setattr(
         "src.core.config._settings",
-        lambda: _FakeSettings({llm.SETTINGS_VERTEX_REGION: "europe-west1"}),
+        lambda: _FakeSettings({llm.SETTINGS_VERTEX_REGION: "eu"}),
     )
 
-    assert llm.configured_region() == "europe-west1"
+    assert llm.configured_region() == "eu"
+
+
+def test_a_single_region_is_diagnosed_as_such_not_as_model_garden(monkeypatch):
+    """The two remedies are opposites. One says go and enable something; the
+    other says the thing you enabled is fine and the endpoint is wrong."""
+    import anthropic
+
+    monkeypatch.setattr(
+        "src.core.config._settings",
+        lambda: _FakeSettings({llm.SETTINGS_VERTEX_REGION: "us-east5"}),
+    )
+    _probe_raising(
+        monkeypatch,
+        _status_error(anthropic.NotFoundError, "Publisher Model not found", 404),
+    )
+
+    with pytest.raises(llm.UnsupportedRegion) as caught:
+        llm.probe(project="proj-x")
+
+    assert caught.value.region == "us-east5"
+
+
+def test_a_pinned_region_is_explained_in_the_checklist(monkeypatch):
+    from src.podcastnotes import checks_account
+
+    monkeypatch.setattr(auth, "project_id", lambda: "proj-x")
+
+    def refuse(project="", region=""):
+        raise llm.UnsupportedRegion("us-east5")
+
+    monkeypatch.setattr(llm, "probe", refuse)
+
+    result = checks_account.check_claude()
+
+    assert result.state is State.FAILED
+    assert "us-east5" in result.detail
+    assert "global" in result.remedy
+    assert "model garden" not in result.remedy.lower(), "wrong remedy entirely"
 
 
 def test_an_empty_saved_region_falls_back_to_global(monkeypatch):
@@ -281,8 +326,14 @@ def test_a_rate_limit_is_not_swallowed(monkeypatch):
         llm.probe(project="proj-x")
 
 
-def test_the_probe_is_cheap(monkeypatch):
-    """It runs on every launch, on somebody's own bill."""
+def test_the_probe_uses_the_model_real_work_uses(monkeypatch):
+    """Not the cheap one, and the reason is correctness rather than thrift.
+
+    Haiku 4.5 is served from regional endpoints and Opus 5 is not. Probing
+    with Haiku would show a green tick on a pinned region and then fail on the
+    first real request, which is the precise failure this check exists to
+    prevent. Sixteen output tokens of Opus costs a fraction of a penny.
+    """
     seen = {}
 
     class FakeMessages:
@@ -300,8 +351,8 @@ def test_the_probe_is_cheap(monkeypatch):
     monkeypatch.setattr(llm, "build_client", lambda project="", region="": FakeClient())
 
     assert llm.probe(project="proj-x") == "ready"
-    assert seen["model"] == llm.MODEL_FAST, "the probe should not use Opus"
-    assert seen["max_tokens"] <= 32
+    assert seen["model"] == llm.MODEL_BEST, "probing a different model proves less"
+    assert seen["max_tokens"] <= 32, "it runs at every launch, on somebody's bill"
 
 
 def test_building_a_client_without_a_project_refuses_rather_than_guessing(monkeypatch):

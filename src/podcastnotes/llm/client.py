@@ -23,12 +23,17 @@ from src.podcastnotes import auth
 MODEL_BEST = "claude-opus-5"
 MODEL_FAST = "claude-haiku-4-5@20251001"
 
-# The global endpoint, not a region. It is 10% cheaper, fails over automatically
-# when one region is at capacity, and sidesteps the question of whether a given
-# model is available in whichever region a colleague's project happens to sit
-# in. The cost of that is no data-residency guarantee, so anyone who needs one
-# sets a region instead; the setting exists for exactly that case.
+# The global endpoint, not a region, and this is a correctness requirement
+# rather than a preference. Specific regional endpoints such as us-east5 carry
+# Sonnet 4.6 and earlier; Opus 5 exists only on the global and multi-region
+# endpoints. Pinning a region therefore does not merely cost 10% more, it makes
+# the model this product depends on unavailable.
+#
+# Data residency is served by the multi-region endpoints "us" and "eu", which
+# keep traffic inside that geography and do carry current models. Those are the
+# only alternatives to global that work.
 DEFAULT_REGION = "global"
+SUPPORTED_REGIONS = ("global", "us", "eu")
 SETTINGS_VERTEX_REGION = "vertex_region"
 
 MODEL_GARDEN_URL = (
@@ -43,6 +48,22 @@ class NotSignedIn(Exception):
 
 class NoProjectChosen(Exception):
     """Signed in, but no Vertex project picked yet."""
+
+
+class UnsupportedRegion(Exception):
+    """A single region was pinned, and current models are not served there.
+
+    Kept apart from ClaudeNotEnabled because the remedies are opposites: one
+    says go and enable something, the other says the thing you enabled is fine
+    and the endpoint is wrong.
+    """
+
+    def __init__(self, region: str):
+        self.region = region
+        super().__init__(
+            f"{region} is a single-region endpoint, which does not carry the "
+            f"current models. Use global, us or eu."
+        )
 
 
 class ClaudeNotEnabled(Exception):
@@ -87,27 +108,38 @@ def build_client(project: str = "", region: str = ""):
 
 
 def probe(project: str = "", region: str = "") -> str:
-    """One real, cheap completion. Returns what Claude said.
+    """One real, cheap completion on the model real work uses. Returns the reply.
 
     A real call rather than a permissions inspection, because every way of
     asking "would this work?" short of asking is wrong in some case that
     matters: the project can exist, the credentials can be valid, the API can
     be enabled, and the call can still fail because nobody accepted the terms
     in Model Garden.
+
+    It uses MODEL_BEST specifically, not the cheaper model. Haiku 4.5 is
+    available on regional endpoints and Opus 5 is not, so probing with Haiku
+    would report a green tick on a pinned region and then fail on the first
+    real request. Sixteen output tokens of Opus costs a fraction of a penny;
+    a check that proves less than it appears to costs a great deal more.
     """
     import anthropic
 
     project = project or auth.project_id()
+    region = region or configured_region()
     client = build_client(project=project, region=region)
 
     try:
         message = client.messages.create(
-            model=MODEL_FAST,
+            model=MODEL_BEST,
             max_tokens=16,
             messages=[{"role": "user", "content": "Reply with the single word: ready"}],
         )
     except anthropic.NotFoundError as e:
-        # 404 on a model that plainly exists means it is not enabled here.
+        if region not in SUPPORTED_REGIONS:
+            # Not a Model Garden problem, and saying so would send somebody to
+            # enable a model that is already enabled. Current models are simply
+            # not served from single-region endpoints.
+            raise UnsupportedRegion(region)
         raise ClaudeNotEnabled(project, str(e))
     except anthropic.PermissionDeniedError as e:
         text = str(e)
