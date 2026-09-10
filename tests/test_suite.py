@@ -401,33 +401,6 @@ class TestRobustness:
         is_ok, msg = check_memory_available("tiny", 5)
         assert isinstance(is_ok, bool)
 
-    def test_checkpoint_save_load(self, tmp_path):
-        """Checkpoint save/load cycle should work."""
-        from src.core.checkpoint import save_checkpoint, load_checkpoint, clear_checkpoint
-
-        # Create a test file
-        test_file = tmp_path / "test.wav"
-        test_file.write_bytes(b"test audio content" * 1000)
-
-        segments = [
-            {"start": 0, "end": 5, "text": "Hello", "confidence": 0.9},
-            {"start": 5, "end": 10, "text": "World", "confidence": 0.95},
-        ]
-
-        # Save
-        save_checkpoint(str(test_file), "medium", "en", segments, 10.0)
-
-        # Load
-        result = load_checkpoint(str(test_file))
-        assert result is not None
-        last_end, loaded_segments = result
-        assert last_end == 10.0
-        assert len(loaded_segments) == 2
-
-        # Clear
-        clear_checkpoint(str(test_file))
-        assert load_checkpoint(str(test_file)) is None
-
     def test_logger_setup(self):
         """Logger should initialize without errors."""
         from src.utils.logger import get_logger, get_debug_info

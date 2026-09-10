@@ -21,10 +21,25 @@ Checks network connectivity before attempting model downloads or token validatio
 Verifies cached model files aren't corrupted (checks file sizes, validates config.yaml structure). Skips re-download if cache is valid.
 
 ## 4. Transcription Checkpoint/Resume
-**Status:** IMPLEMENTED
-**Location:** `src/core/checkpoint.py`
+**Status:** NOT IMPLEMENTED, REMOVED
 
-Saves progress checkpoints for long audio files. Can resume from last checkpoint after crash. Uses file hash for verification.
+`src/core/checkpoint.py` existed and was never called by anything. This entry previously claimed
+resume-after-crash shipped and worked; it never has. The module was also unsound, so it has been
+deleted rather than wired up:
+
+- File identity was MD5 of only the **first 1 MB**, truncated to 64 bits. Any two recordings sharing
+  their opening megabyte, such as a clip trimmed from the head of a longer file, mapped to the same
+  checkpoint. On collision a save silently overwrote, a load returned the wrong file's transcript and
+  reported it valid, and a clear deleted someone else's work.
+- The hash "verification" compared the hash to a value read from a path derived from that same hash,
+  so it could only fail if the file had been hand-edited.
+- `model_size` and `language` were stored and never compared on load, so resuming under a different
+  model produced a transcript that was silently half one model and half another.
+- Files that could not be read all shared one `checkpoint_unknown.json` bucket, and nothing ever
+  pruned the directory.
+
+Resume is still worth having eventually. It needs a sound file identity, the model and language in
+the cache key, and a decision about transcription quality across the resume seam.
 
 ## 5. Memory Management for Large Files
 **Status:** IMPLEMENTED
@@ -56,17 +71,24 @@ Logs to `~/Library/Logs/WhisperTranscriber/`. Includes `get_debug_info()` functi
 
 Validates before queueing: file exists, file size > 0, file is readable, extension is supported. Shows specific error messages.
 
-## 10. Watchdog for Hung Transcriptions
-**Status:** IMPLEMENTED
+## 10. Stall Detection Between Segments
+**Status:** IMPLEMENTED, with a real limitation
 **Location:** `src/core/transcriber.py` - `SEGMENT_TIMEOUT`
 
-Monitors for hung transcriptions. If no progress for >5 minutes, raises error with diagnostic info. Prevents app appearing frozen.
+If more than 5 minutes elapse between two transcribed segments, the run aborts with the measured gap.
+
+This is not a hang detector, despite its former name. The check only executes when the segment
+generator yields, so it reports a gap after the fact. If faster-whisper is genuinely wedged inside a
+blocking call, the loop body is never reached and this never fires. Catching that needs a timer on
+another thread.
 
 ---
 
 ## Test Coverage
 
-All features are tested in `tests/test_suite.py`:
-- 36 tests total, all passing
-- Tests for each robustness feature
-- Integration tests for FFmpeg and model cache
+Run with `python -m pytest` (see `requirements-dev.txt`). Suite lives under `tests/`; the scripts in
+`tests/manual/` are hand-run and deliberately not collected.
+
+Do not restate a test count here. The previous version of this file claimed 36 passing tests against
+a suite that had since been renamed and re-counted, which is how the checkpoint entry above went
+unnoticed for so long.
