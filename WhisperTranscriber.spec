@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for Whisper Transcriber
+PyInstaller spec file for PodcastNotesWT
 """
 
 import os
@@ -172,7 +172,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Whisper Transcriber',
+    name='PodcastNotesWT',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -193,17 +193,17 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Whisper Transcriber',
+    name='PodcastNotesWT',
 )
 
 app = BUNDLE(
     coll,
-    name='Whisper Transcriber.app',
+    name='PodcastNotesWT.app',
     icon=os.path.join(resources_dir, 'icon.icns'),
-    bundle_identifier='com.whispertranscriber.app',
+    bundle_identifier='com.podcastnoteswt.app',
     info_plist={
-        'CFBundleName': 'Whisper Transcriber',
-        'CFBundleDisplayName': 'Whisper Transcriber',
+        'CFBundleName': 'PodcastNotesWT',
+        'CFBundleDisplayName': 'PodcastNotesWT',
         'CFBundleVersion': APP_VERSION,
         'CFBundleShortVersionString': APP_VERSION,
         'NSHighResolutionCapable': True,

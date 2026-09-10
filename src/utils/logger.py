@@ -105,7 +105,7 @@ def get_debug_info() -> str:
     import platform
 
     info_lines = [
-        "=== Whisper Transcriber Debug Info ===",
+        "=== PodcastNotesWT Debug Info ===",
         f"Date: {datetime.now().isoformat()}",
         f"OS: {platform.system()} {platform.release()}",
         f"Python: {sys.version}",

@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Whisper Transcriber")
+        self.setWindowTitle("PodcastNotesWT")
         self.setMinimumSize(900, 750)
 
         self._logger = get_logger()
@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
         self._setup_menu()
 
     def _setup_menu(self):
-        app_menu = self.menuBar().addMenu("Whisper Transcriber")
+        app_menu = self.menuBar().addMenu("PodcastNotesWT")
         settings_action = app_menu.addAction("Settings...")
         settings_action.setShortcut("Cmd+,")
         settings_action.triggered.connect(self._open_settings)

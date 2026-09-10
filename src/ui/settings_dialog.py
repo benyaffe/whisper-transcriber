@@ -1,5 +1,5 @@
 """
-Settings dialog for Whisper Transcriber.
+Settings dialog for PodcastNotesWT.
 Handles speaker identification toggle and HuggingFace token configuration.
 """
 

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build script for Whisper Transcriber
+# Build script for PodcastNotesWT
 # Creates a self-contained .app bundle and DMG using PyInstaller
 
 set -e
 
-echo "=== Whisper Transcriber Build ==="
+echo "=== PodcastNotesWT Build ==="
 echo ""
 
 cd "$(dirname "$0")"
@@ -28,7 +28,7 @@ echo "Building app bundle with PyInstaller (this may take several minutes)..."
 pyinstaller WhisperTranscriber.spec --noconfirm
 
 # Verify FFmpeg was bundled (PyInstaller puts it in Frameworks/bin/)
-if [ -f "dist/Whisper Transcriber.app/Contents/Frameworks/bin/ffmpeg" ]; then
+if [ -f "dist/PodcastNotesWT.app/Contents/Frameworks/bin/ffmpeg" ]; then
     echo "✓ FFmpeg bundled successfully"
 else
     echo "⚠ Warning: FFmpeg may not be bundled correctly"
@@ -37,24 +37,24 @@ fi
 # Create styled DMG
 echo "Creating DMG..."
 VERSION=$(tr -d '[:space:]' < VERSION)
-DMG_NAME="WhisperTranscriber-${VERSION}.dmg"
+DMG_NAME="PodcastNotesWT-${VERSION}.dmg"
 rm -f "$DMG_NAME"
 
 create-dmg \
-    --volname "Whisper Transcriber" \
+    --volname "PodcastNotesWT" \
     --volicon "resources/icon.icns" \
     --background "resources/dmg_background.png" \
     --window-pos 200 120 \
     --window-size 660 400 \
     --icon-size 100 \
-    --icon "Whisper Transcriber.app" 150 220 \
-    --hide-extension "Whisper Transcriber.app" \
+    --icon "PodcastNotesWT.app" 150 220 \
+    --hide-extension "PodcastNotesWT.app" \
     --app-drop-link 510 220 \
     "$DMG_NAME" \
-    "dist/Whisper Transcriber.app"
+    "dist/PodcastNotesWT.app"
 
 echo ""
 echo "=== Build Complete ==="
-echo "App: dist/Whisper Transcriber.app"
+echo "App: dist/PodcastNotesWT.app"
 echo "DMG: $DMG_NAME"
 ls -lh "$DMG_NAME"

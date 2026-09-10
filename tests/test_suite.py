@@ -236,7 +236,7 @@ class TestSettings:
         The org/app pair resolves to
         ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist,
         where every existing install already has its setting. main.py sets the
-        application name to "Whisper Transcriber" WITH A SPACE, so switching to
+        application name to "PodcastNotesWT", so switching to
         a default-constructed QSettings() would silently read a different file
         and reset everyone's preference.
         """
@@ -422,7 +422,7 @@ class TestRobustness:
         logger = get_logger()
         assert logger is not None
         info = get_debug_info()
-        assert "Whisper Transcriber Debug Info" in info
+        assert "PodcastNotesWT Debug Info" in info
 
 
 # =============================================================================

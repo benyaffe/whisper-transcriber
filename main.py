@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Whisper Transcription GUI
-Transcribe audio/video files to VTT/TXT using faster-whisper
+PodcastNotesWT
+
+Takes the recordings from a trip and turns them into a transcript and, in
+time, the write-up. A single recording is a trip of one.
 """
 
 import sys
@@ -58,7 +60,7 @@ def cleanup_and_exit(*args):
     os._exit(0)
 
 
-class WhisperApp(QApplication):
+class PodcastNotesApp(QApplication):
     """Custom QApplication that raises window on activation (Cmd+Tab)."""
 
     def __init__(self, argv):
@@ -94,7 +96,7 @@ def main():
 
     # Prevent multiple instances
     if not acquire_single_instance_lock():
-        print("Whisper Transcriber is already running.")
+        print("PodcastNotesWT is already running.")
         sys.exit(0)
 
     # Register cleanup handlers to prevent respawn
@@ -107,8 +109,8 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
-    app = WhisperApp(sys.argv)
-    app.setApplicationName("Whisper Transcriber")
+    app = PodcastNotesApp(sys.argv)
+    app.setApplicationName("PodcastNotesWT")
     app.setOrganizationName("WhisperTranscriber")
 
     # Ensure app quits when window is closed (prevent respawn)

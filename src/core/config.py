@@ -14,6 +14,11 @@ module costs nothing and pulls in no Qt.
 
 # Keychain coordinates. The service name is also what macOS shows the user in
 # Keychain Access, so changing it orphans every existing stored token.
+#
+# The app is called PodcastNotesWT now. This deliberately still says
+# WhisperTranscriber, and so do the QSettings names below. They are storage
+# keys, not labels: nobody sees them, and renaming them would silently sign
+# everybody out and reset their preferences to buy nothing at all.
 KEYRING_SERVICE = "WhisperTranscriber"
 KEYRING_HF_TOKEN = "hf_token"
 
