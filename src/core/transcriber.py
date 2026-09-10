@@ -200,6 +200,9 @@ class TranscriptionWorker(QThread):
         self._temp_audio = False
         self._will_diarize = False
         self._progress_ceiling = self.DEFAULT_TRANSCRIBE_CEILING
+        # Populated by _run_diarization, consumed by the JSON export.
+        self._diarization = None
+        self._speaker_map: dict[str, str] = {}
 
     def run(self):
         try:
@@ -486,19 +489,21 @@ class TranscriptionWorker(QThread):
 
         try:
             self.status_message.emit("[Speaker ID: Starting...]")
-            turns = run_diarization(
+            result = run_diarization(
                 self.audio_path,
                 hf_token,
                 status_callback=status_cb,
                 progress_callback=progress_cb
             )
 
-            if not turns:
+            if not result.turns:
                 self.status_message.emit("[Speaker ID: No speakers detected]")
                 self._speaker_id_used = False
                 return
 
-            speaker_map = assign_speakers_to_segments(self.segments, turns)
+            self._diarization = result
+            speaker_map = assign_speakers_to_segments(self.segments, result.turns)
+            self._speaker_map = speaker_map
             self._speaker_id_used = True
             # Debug: verify speakers were assigned
             assigned = sum(1 for s in self.segments if s.speaker)

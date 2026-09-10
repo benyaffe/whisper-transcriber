@@ -99,20 +99,41 @@ class FakeAnnotation:
             yield (segment, None, speaker) if yield_label else (segment, None)
 
 
-class FakeDiarizeOutput:
-    """Shape of pyannote 4.x's DiarizeOutput dataclass.
+class FakeAnnotationWithLabels(FakeAnnotation):
+    """FakeAnnotation that also implements labels(), like pyannote's Annotation.
 
-    Carries speaker_embeddings and exclusive_speaker_diarization even though
-    run_diarization discards them today -- WT-3 is what starts reading them,
-    and the double should not be the thing that has to change then.
+    Ordering matters: speaker_embeddings rows are aligned with labels(), and
+    pyannote sorts labels by str, so the double sorts too.
     """
 
+    def labels(self):
+        return sorted({speaker for _, _, speaker in self._turns}, key=str)
+
+
+class FakeDiarizeOutput:
+    """Shape of pyannote 4.x's DiarizeOutput dataclass."""
+
     def __init__(self, turns=(), embeddings=None, exclusive_turns=None):
-        self.speaker_diarization = FakeAnnotation(turns)
-        self.exclusive_speaker_diarization = FakeAnnotation(
+        self.speaker_diarization = FakeAnnotationWithLabels(turns)
+        self.exclusive_speaker_diarization = FakeAnnotationWithLabels(
             turns if exclusive_turns is None else exclusive_turns
         )
         self.speaker_embeddings = embeddings
+
+
+def make_embeddings(*rows, dimension=256):
+    """Build a (n, dimension) float32 array from per-row fill values.
+
+    A fill of 0 produces the all-zero row pyannote emits for a padded phantom
+    speaker; float("nan") produces the degenerate row from its max_clusters<2
+    shortcut. Both must be rejected as voice profiles.
+    """
+    import numpy as np
+
+    return np.array(
+        [np.full(dimension, fill, dtype=np.float32) for fill in rows],
+        dtype=np.float32,
+    )
 
 
 class FakePipeline:

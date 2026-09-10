@@ -437,16 +437,16 @@ def test_diarization_always_keeps_a_usable_share_of_the_bar():
 
 
 def test_run_diarization_still_returns_turns(patched_diarization):
-    """Adding the hook must not disturb the return value."""
+    """Adding the hook must not disturb the speech turns."""
     from src.core.diarization import run_diarization
 
-    turns = run_diarization(
+    result = run_diarization(
         "/tmp/does-not-matter.wav",
         "hf_test_token",
         progress_callback=lambda fraction, label: None,
     )
 
-    assert [(t.start, t.end, t.speaker) for t in turns] == [
+    assert [(t.start, t.end, t.speaker) for t in result.turns] == [
         (0.0, 1.0, "SPEAKER_00"),
         (1.0, 2.0, "SPEAKER_01"),
     ]

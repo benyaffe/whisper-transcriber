@@ -5,7 +5,7 @@ Requires HuggingFace token with read access to gated repos.
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 
@@ -49,6 +49,28 @@ class SpeakerTurn:
     start: float
     end: float
     speaker: str
+
+
+@dataclass
+class DiarizationResult:
+    """Everything pyannote produced, rather than just the speech turns.
+
+    The pipeline has always computed per-speaker voice embeddings and a
+    non-overlapping view of the timeline; the previous return type threw both
+    away. The Speaker Library needs the embeddings, and the exclusive turns are
+    what segments should be aligned against.
+    """
+
+    turns: list[SpeakerTurn]
+    # Non-overlapping view: where several people talk at once, only the loudest
+    # per frame survives. Empty if the pipeline did not provide one.
+    exclusive_turns: list[SpeakerTurn]
+    # Raw pyannote label ("SPEAKER_00") -> embedding. Unusable rows are dropped
+    # rather than stored, so a caller can trust every vector in here.
+    embeddings: dict[str, list[float]]
+    embedding_dimension: Optional[int] = None
+    # Speakers with no usable embedding, or absent from exclusive_turns.
+    dropped_speakers: list[str] = field(default_factory=list)
 
 
 # Fraction of the diarization phase each pyannote step accounts for, in the
@@ -421,7 +443,7 @@ def run_diarization(
     hf_token: str,
     status_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
-) -> list[SpeakerTurn]:
+) -> DiarizationResult:
     """
     Run speaker diarization using pyannote.audio.
 
@@ -434,7 +456,8 @@ def run_diarization(
             Called on this thread, throttled to a few times per second.
 
     Returns:
-        list of SpeakerTurn
+        DiarizationResult with speech turns, a non-overlapping view of them,
+        and per-speaker voice embeddings.
 
     Raises:
         DiarizationError: If diarization fails
@@ -586,23 +609,102 @@ def run_diarization(
             log(f"[  {line}]")
         raise DiarizationError(f"Diarization failed: {e}")
 
-    # pyannote 4.x returns DiarizeOutput; extract the Annotation
-    annotation = diarization
-    if hasattr(diarization, 'speaker_diarization'):
-        annotation = diarization.speaker_diarization
+    # pyannote 4.x returns DiarizeOutput; older shapes return a bare Annotation.
+    annotation = getattr(diarization, 'speaker_diarization', diarization)
+    exclusive = getattr(diarization, 'exclusive_speaker_diarization', None)
 
-    turns = []
-    for turn, _, speaker in annotation.itertracks(yield_label=True):
-        turns.append(SpeakerTurn(
-            start=turn.start,
-            end=turn.end,
-            speaker=speaker
-        ))
+    turns = _annotation_to_turns(annotation)
+    exclusive_turns = _annotation_to_turns(exclusive) if exclusive is not None else []
+
+    embeddings, dimension, unusable = _extract_speaker_embeddings(
+        getattr(diarization, 'speaker_embeddings', None), annotation, log
+    )
+
+    # A speaker who is always talked over never wins the per-frame argmax and
+    # so is absent from the exclusive annotation entirely. Worth surfacing,
+    # since the exclusive turns are what segments get aligned against.
+    exclusive_labels = {t.speaker for t in exclusive_turns}
+    missing_from_exclusive = sorted(
+        {t.speaker for t in turns} - exclusive_labels
+    ) if exclusive_turns else []
+    for label in missing_from_exclusive:
+        log(f"[Speaker ID: {label} is always overlapped, omitted from exclusive turns]")
 
     num_speakers = len(set(t.speaker for t in turns))
     log(f"[Speaker ID: Found {num_speakers} speaker(s)]")
 
-    return turns
+    return DiarizationResult(
+        turns=turns,
+        exclusive_turns=exclusive_turns,
+        embeddings=embeddings,
+        embedding_dimension=dimension,
+        dropped_speakers=sorted(set(unusable) | set(missing_from_exclusive)),
+    )
+
+
+def _annotation_to_turns(annotation) -> list[SpeakerTurn]:
+    """Flatten a pyannote Annotation into plain SpeakerTurn records."""
+    return [
+        SpeakerTurn(start=turn.start, end=turn.end, speaker=speaker)
+        for turn, _, speaker in annotation.itertracks(yield_label=True)
+    ]
+
+
+def _extract_speaker_embeddings(
+    speaker_embeddings, annotation, log: Callable[[str], None]
+) -> tuple[dict[str, list[float]], Optional[int], list[str]]:
+    """Pull per-speaker voice embeddings out of a DiarizeOutput.
+
+    Rows are aligned with ``annotation.labels()``. Returns
+    (label -> vector, dimension, labels whose row was unusable).
+
+    Two rows must never be stored as voice profiles:
+
+    * All-zero. When the frame-level speaker count exceeds the number of
+      clusters, pyannote pads the centroid array with zeros and *then* reorders
+      it to match the labels, so a zero row can land at any index, not just the
+      end. Cosine similarity against a zero vector is undefined, so one of
+      these in the Speaker Library would match everybody or nobody.
+    * All-NaN, reachable via the ``max_clusters < 2`` shortcut in pyannote's
+      clustering when every embedding was filtered out beforehand.
+    """
+    if speaker_embeddings is None:
+        return {}, None, []
+
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - numpy is a hard dependency
+        return {}, None, []
+
+    rows = np.asarray(speaker_embeddings)
+    if rows.ndim != 2 or rows.shape[0] == 0:
+        # (0, dim) is the documented shape for a file with no speech at all.
+        dimension = int(rows.shape[1]) if rows.ndim == 2 else None
+        return {}, dimension, []
+
+    labels = annotation.labels()
+    dimension = int(rows.shape[1])
+    embeddings: dict[str, list[float]] = {}
+    unusable: list[str] = []
+
+    for label, row in zip(labels, rows):
+        if not np.isfinite(row).all() or not np.any(row):
+            unusable.append(label)
+            continue
+        embeddings[label] = [float(x) for x in row]
+
+    if unusable:
+        log(
+            f"[Speaker ID: no usable voice profile for {', '.join(unusable)} "
+            f"(padded or degenerate embedding)]"
+        )
+    if len(labels) != rows.shape[0]:
+        log(
+            f"[Speaker ID: {len(labels)} speaker(s) but {rows.shape[0]} embedding row(s); "
+            f"pairing the {min(len(labels), rows.shape[0])} that line up]"
+        )
+
+    return embeddings, dimension, unusable
 
 
 def assign_speakers_to_segments(segments: list, turns: list[SpeakerTurn]) -> dict[str, str]:
