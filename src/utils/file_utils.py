@@ -242,8 +242,8 @@ def extract_audio(video_path: str, output_path: str = None) -> str:
 
 def generate_output_paths(source_path: str) -> tuple:
     """
-    Generate output paths for VTT and TXT files.
-    Returns (vtt_path, txt_path)
+    Generate output paths for VTT, TXT and JSON files.
+    Returns (vtt_path, txt_path, json_path)
     """
     base, _ = os.path.splitext(source_path)
-    return base + '.vtt', base + '.txt'
+    return base + '.vtt', base + '.txt', base + '.json'

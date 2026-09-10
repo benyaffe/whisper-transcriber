@@ -816,7 +816,7 @@ class MainWindow(QMainWindow):
             self.current_item.update_display()
         self.preview_text.append(f"<i style='color: #c90;'>[Warning: {message}]</i>")
 
-    def _on_transcription_complete(self, vtt_path: str, txt_path: str, audio_path: str):
+    def _on_transcription_complete(self, vtt_path: str, txt_path: str, json_path: str, audio_path: str):
         import subprocess
 
         if self.current_item:

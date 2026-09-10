@@ -155,7 +155,7 @@ class TranscriptionWorker(QThread):
     quality_warning = pyqtSignal(str)  # warning message
     hardware_info = pyqtSignal(str)  # hardware description
     audio_ready = pyqtSignal(str)  # audio path for playback
-    completed = pyqtSignal(str, str, str)  # vtt_path, txt_path, audio_path
+    completed = pyqtSignal(str, str, str, str)  # vtt_path, txt_path, json_path, audio_path
     error = pyqtSignal(str)  # error message
 
     # Quality thresholds
@@ -398,8 +398,8 @@ class TranscriptionWorker(QThread):
         # Step 7: Save outputs
         if self._cancelled:
             return
-        vtt_path, txt_path = self._save_outputs()
-        self.completed.emit(vtt_path, txt_path, self.audio_path)
+        vtt_path, txt_path, json_path = self._save_outputs()
+        self.completed.emit(vtt_path, txt_path, json_path, self.audio_path)
 
     def _prepare_audio(self) -> str:
         """Extract audio from video if needed; otherwise snapshot the
@@ -549,9 +549,9 @@ class TranscriptionWorker(QThread):
 
         return QualityMetrics(avg_conf, low_ratio, rep_score)
 
-    def _save_outputs(self) -> tuple[str, str]:
-        """Save transcription to VTT and TXT with speaker labels."""
-        vtt_path, txt_path = generate_output_paths(self.filepath)
+    def _save_outputs(self) -> tuple[str, str, str]:
+        """Save transcription to VTT, TXT and JSON with speaker labels."""
+        vtt_path, txt_path, json_path = generate_output_paths(self.filepath)
 
         # Debug: log speaker ID state
         self._logger.info(f"Saving outputs: _speaker_id_used={self._speaker_id_used}, segments={len(self.segments)}")
@@ -580,7 +580,38 @@ class TranscriptionWorker(QThread):
                     f.write(f"\n{current_speaker}:\n")
                 f.write(f"{seg.text} ")
 
-        return vtt_path, txt_path
+        # JSON - the machine-readable one. Written on every run, including when
+        # speaker ID is off, so a consumer can rely on it existing.
+        self._save_json(json_path)
+
+        return vtt_path, txt_path, json_path
+
+    def _save_json(self, json_path: str):
+        """Write the segment JSON. Never fails the run.
+
+        A transcription that produced a good VTT and TXT should not be reported
+        as failed because the extra machine-readable file could not be written.
+        """
+        from src.core.json_export import build_payload, write_json
+
+        try:
+            info = get_file_info(self.audio_path or self.filepath)
+            payload = build_payload(
+                source_path=self.filepath,
+                segments=self.segments,
+                duration=info.get('duration', 0.0),
+                model=self.model_size,
+                language=self.language,
+                device=detect_diarization_device() if self._speaker_id_used else "cpu",
+                speaker_id_used=self._speaker_id_used,
+                speaker_map=self._speaker_map,
+                diarization=self._diarization,
+            )
+            write_json(json_path, payload)
+            self._logger.info(f"Wrote segment JSON: {json_path}")
+        except Exception as e:
+            log_exception(e, "json export")
+            self.status_message.emit(f"[JSON export failed: {type(e).__name__}: {e}]")
 
     def _format_vtt_time(self, seconds: float) -> str:
         """Format seconds as VTT timestamp."""

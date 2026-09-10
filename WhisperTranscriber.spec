@@ -46,6 +46,9 @@ asteroid_datas = collect_data_files('asteroid_filterbanks')
 datas = [
     (os.path.join(ffmpeg_dir, 'ffmpeg'), 'bin'),
     (os.path.join(ffmpeg_dir, 'ffprobe'), 'bin'),
+    # Read at runtime by json_export for the metadata block, so it has to be
+    # unpacked into the bundle and not just baked into Info.plist.
+    (os.path.join(project_dir, 'VERSION'), '.'),
 ]
 
 # Add faster_whisper assets (silero VAD model)
