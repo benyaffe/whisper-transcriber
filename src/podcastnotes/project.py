@@ -20,29 +20,41 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.utils.file_utils import get_file_info
+from src.utils.file_utils import get_file_info, is_url
 
 WORK_DIR_NAME = "_podcastnotes"
 STATE_FILENAME = "project.json"
 STATE_VERSION = 1
+
+# Where a trip goes when every one of its sources is a URL and there is
+# therefore nowhere on disk to sit beside.
+REMOTE_TRIPS_DIR = os.path.join(
+    os.path.expanduser("~"), "Documents", "PodcastNotesWT"
+)
 
 
 @dataclass
 class SourceRecording:
     """One recording, and enough about it to notice if it goes missing.
 
-    `path` is absolute, so moving a recording after starting a trip breaks the
-    link. `name` and `duration` are kept so that when it does break we can say
-    which recording is gone and how long it was, rather than printing a dead
-    path and stopping.
+    For a local file `path` is absolute, so moving the recording after starting
+    a trip breaks the link. `name` and `duration` are kept so that when it does
+    break we can say which recording is gone and how long it was, rather than
+    printing a dead path and stopping.
+
+    A source can also be a URL that has not been fetched yet. Those have no
+    duration and no local existence until the trip runs.
     """
 
     path: str
     name: str
     duration: float = 0.0
+    remote: bool = False
 
     @classmethod
     def from_path(cls, path: str) -> "SourceRecording":
+        if is_url(path):
+            return cls.from_url(path)
         absolute = os.path.abspath(path)
         info = get_file_info(absolute)
         return cls(
@@ -51,9 +63,20 @@ class SourceRecording:
             duration=float(info.get("duration") or 0.0),
         )
 
+    @classmethod
+    def from_url(cls, url: str) -> "SourceRecording":
+        """A recording that still has to be fetched.
+
+        Deliberately does not go near os.path.abspath, which would turn
+        "https://example.com/x" into "<cwd>/https:/example.com/x".
+        """
+        tail = url.rstrip("/").rsplit("/", 1)[-1] or url
+        return cls(path=url, name=tail, duration=0.0, remote=True)
+
     @property
     def exists(self) -> bool:
-        return os.path.isfile(self.path)
+        """A remote source cannot be checked without fetching it."""
+        return True if self.remote else os.path.isfile(self.path)
 
 
 def slugify(name: str) -> str:
@@ -66,13 +89,21 @@ def slugify(name: str) -> str:
 def _common_parent(paths: list[str]) -> str:
     """Where the recordings live.
 
+    URLs are skipped: they are nowhere on disk. A trip made entirely of URLs
+    has no natural home beside its sources, so it falls back to
+    ~/Documents/PodcastNotesWT.
+
     os.path.commonpath on a single file would give the file itself, and on
     recordings spread across sibling folders it gives their shared parent,
     which is the sensible place for the trip either way.
     """
-    directories = [os.path.dirname(os.path.abspath(p)) for p in paths]
-    if not directories:
+    local = [p for p in paths if not is_url(p)]
+    if not paths:
         raise ValueError("a trip needs at least one recording")
+    if not local:
+        return REMOTE_TRIPS_DIR
+
+    directories = [os.path.dirname(os.path.abspath(p)) for p in local]
     if len(directories) == 1:
         return directories[0]
     return os.path.commonpath(directories)
@@ -84,7 +115,10 @@ def resolve_work_dir(sources: list[str], slug: str, taken: Optional[set] = None)
     Two trips named the same thing in one folder get `-2`, `-3` and so on,
     rather than the second silently writing over the first.
     """
-    base = os.path.join(_common_parent(sources), WORK_DIR_NAME)
+    parent = _common_parent(sources)
+    # A trip of URLs already lives in a dedicated folder; nesting _podcastnotes
+    # inside it would just add a pointless level.
+    base = parent if parent == REMOTE_TRIPS_DIR else os.path.join(parent, WORK_DIR_NAME)
     taken = taken if taken is not None else set()
 
     candidate = slug
