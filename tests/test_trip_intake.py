@@ -1,0 +1,228 @@
+"""
+Tests for the trip intake screen.
+
+Run with: python -m pytest tests/test_trip_intake.py -v
+"""
+
+import os
+
+import pytest
+
+from src.ui.podcastnotes.intake_view import IntakeView, RecordingList
+
+
+@pytest.fixture
+def audio_files(tmp_path):
+    paths = []
+    for name in ("one.m4a", "two.m4a", "three.m4a"):
+        p = tmp_path / name
+        p.write_bytes(b"pretend audio " * 100)
+        paths.append(str(p))
+    return paths
+
+
+@pytest.fixture
+def view(qt_app, monkeypatch):
+    # A token exists by default, so the speaker check is not the thing failing
+    # in tests that are about something else.
+    monkeypatch.setattr(IntakeView, "_hf_token", staticmethod(lambda: "hf_test"))
+    # _report_problem opens a modal dialog, which would block the test runner
+    # forever. Record what it was told instead.
+    reported = []
+    monkeypatch.setattr(IntakeView, "_report_problem", lambda self, p: reported.append(p))
+    v = IntakeView()
+    v.reported = reported
+    yield v
+    v.close()
+
+
+def ready(view, name="Ashford", sources=(), speakers=True):
+    view.name_input.setText(name)
+    for s in sources:
+        view.recordings.add(s)
+    view.speakers_checkbox.setChecked(speakers)
+    return view
+
+
+def started(view):
+    """Capture what the view emits when Start is pressed."""
+    calls = []
+    view.start_requested.connect(lambda *a: calls.append(a))
+    view._start()
+    return calls
+
+
+# --- the recordings list ------------------------------------------------------
+
+
+def test_recordings_keep_the_order_they_were_added(qt_app, audio_files):
+    listing = RecordingList()
+
+    for p in reversed(audio_files):
+        listing.add(p)
+
+    assert listing.sources() == list(reversed(audio_files))
+
+
+def test_the_same_recording_cannot_be_added_twice(qt_app, audio_files):
+    listing = RecordingList()
+
+    assert listing.add(audio_files[0]) is True
+    assert listing.add(audio_files[0]) is False
+    assert listing.sources() == [audio_files[0]]
+
+
+def test_a_url_is_shown_in_full_and_a_file_by_name(qt_app, audio_files):
+    listing = RecordingList()
+    listing.add(audio_files[0])
+    listing.add("https://youtube.com/watch?v=abc")
+
+    assert listing.item(0).text() == "one.m4a"
+    assert listing.item(1).text() == "https://youtube.com/watch?v=abc"
+    # The full path is still what gets used.
+    assert listing.sources()[0] == audio_files[0]
+
+
+def test_the_list_can_be_reordered_by_dragging(qt_app, audio_files):
+    """Which meeting came first is the operator's call."""
+    listing = RecordingList()
+    for p in audio_files:
+        listing.add(p)
+
+    assert listing.dragDropMode() == listing.DragDropMode.InternalMove
+
+
+# --- validation ---------------------------------------------------------------
+
+
+def test_a_trip_needs_a_name(view, audio_files):
+    ready(view, name="", sources=audio_files[:1])
+
+    assert "name" in view._problem().lower()
+    assert started(view) == []
+    assert "name" in view.reported[-1].lower(), "the operator was not told why"
+
+
+def test_a_trip_needs_a_recording(view):
+    ready(view, name="Ashford")
+
+    assert "recording" in view._problem().lower()
+    assert started(view) == []
+    assert "recording" in view.reported[-1].lower(), "the operator was not told why"
+
+
+def test_speakers_without_a_token_blocks_and_names_settings(view, audio_files, monkeypatch):
+    """Catch it here, not thirty minutes into a transcription."""
+    monkeypatch.setattr(IntakeView, "_hf_token", staticmethod(lambda: ""))
+    ready(view, sources=audio_files[:1], speakers=True)
+
+    problem = view._problem()
+
+    assert "Settings" in problem
+    assert "Multiple speakers" in problem
+    assert started(view) == []
+    assert IntakeView._needs_token(problem), "should offer to open Settings"
+
+
+def test_turning_speakers_off_unblocks_a_trip_with_no_token(view, audio_files, monkeypatch):
+    """A solo lecture should not need a HuggingFace account."""
+    monkeypatch.setattr(IntakeView, "_hf_token", staticmethod(lambda: ""))
+    ready(view, sources=audio_files[:1], speakers=False)
+
+    assert view._problem() == ""
+    assert len(started(view)) == 1
+
+
+def test_a_valid_trip_has_no_problem(view, audio_files):
+    ready(view, sources=audio_files)
+
+    assert view._problem() == ""
+
+
+# --- starting -----------------------------------------------------------------
+
+
+def test_start_emits_everything_the_worker_needs(view, audio_files):
+    ready(view, name="  Ashford hospital tour  ", sources=audio_files)
+    view.description_input.setPlainText("  Ridgeline and Lakeside General, with Rosa  ")
+
+    calls = started(view)
+
+    assert len(calls) == 1
+    name, description, sources, speakers = calls[0]
+    assert name == "Ashford hospital tour"          # trimmed
+    assert description == "Ridgeline and Lakeside General, with Rosa"
+    assert sources == audio_files
+    assert speakers is True
+
+
+def test_start_passes_the_reordered_sources(view, audio_files):
+    ready(view, sources=list(reversed(audio_files)))
+
+    _, _, sources, _ = started(view)[0]
+
+    assert sources == list(reversed(audio_files))
+
+
+def test_speakers_off_is_carried_through(view, audio_files):
+    ready(view, sources=audio_files[:1], speakers=False)
+
+    assert started(view)[0][3] is False
+
+
+def test_a_description_is_optional(view, audio_files):
+    ready(view, sources=audio_files[:1])
+
+    assert started(view)[0][1] == ""
+
+
+# --- adding ------------------------------------------------------------------
+
+
+def test_a_url_and_a_local_file_can_share_a_trip(view, audio_files):
+    view.recordings.add(audio_files[0])
+    view.url_input.setText("https://youtube.com/watch?v=abc")
+    view._add_url()
+
+    assert view.recordings.sources() == [audio_files[0], "https://youtube.com/watch?v=abc"]
+    assert view.url_input.text() == "", "the box should clear after adding"
+
+
+def test_something_that_is_not_a_url_is_refused(view, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    view.url_input.setText("just some words")
+    view._add_url()
+
+    assert view.recordings.sources() == []
+
+
+def test_unusable_files_are_rejected_with_a_reason(view, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    shown = {}
+    monkeypatch.setattr(QMessageBox, "warning", lambda p, t, m, *a, **k: shown.update(msg=m))
+
+    empty = tmp_path / "empty.m4a"
+    empty.write_bytes(b"")
+    document = tmp_path / "notes.txt"
+    document.write_text("not audio")
+
+    view.add_sources([str(empty), str(document)])
+
+    assert view.recordings.sources() == []
+    assert "empty.m4a" in shown["msg"]
+    assert "notes.txt" in shown["msg"]
+
+
+def test_good_files_are_kept_when_others_are_rejected(view, audio_files, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    bad = tmp_path / "bad.txt"
+    bad.write_text("nope")
+
+    view.add_sources([audio_files[0], str(bad), audio_files[1]])
+
+    assert view.recordings.sources() == [audio_files[0], audio_files[1]]

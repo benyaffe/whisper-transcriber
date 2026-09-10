@@ -83,7 +83,12 @@ def validate_input_file(filepath: str) -> tuple[bool, str]:
     # Check extension
     ext = os.path.splitext(filepath)[1].lower()
     if ext not in get_supported_extensions():
-        return False, f"Unsupported format '{ext}'. Supported: mp4, mp3, wav, etc."
+        # Named, like every other rejection here. Dropping five files and being
+        # told "unsupported format" about an unnamed one is not actionable.
+        return False, (
+            f"{os.path.basename(filepath)}: unsupported format '{ext}'. "
+            "Supported: mp4, mp3, wav, etc."
+        )
 
     # All checks passed
     return True, f"File OK: {os.path.basename(filepath)} ({size / 1024 / 1024:.1f} MB)"
