@@ -121,6 +121,37 @@ def get_bundled_binary(name: str) -> str:
     return name
 
 
+def get_resource_path(name: str) -> str:
+    """
+    Get path to a bundled data file (OAuth client, stylesheets).
+
+    Data files are not binaries: PyInstaller unpacks them under sys._MEIPASS,
+    not next to the executable, so get_bundled_binary's locations do not apply.
+    Loading these with a path relative to the source tree is the classic
+    "works in development, ships blank" bug.
+
+    Returns a path that may not exist; callers decide what a missing resource
+    means, since for some it is fatal and for others it is a default.
+    """
+    if getattr(sys, 'frozen', False):
+        possible_dirs = [
+            getattr(sys, '_MEIPASS', ''),
+            os.path.join(os.path.dirname(sys.executable), 'resources'),
+            os.path.abspath(os.path.join(
+                os.path.dirname(sys.executable), '..', 'Resources')),
+        ]
+        for directory in possible_dirs:
+            if not directory:
+                continue
+            path = os.path.join(directory, name)
+            if os.path.exists(path):
+                return path
+
+    # Development: resources/ at the repo root, three levels up from here.
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    return os.path.join(root, 'resources', name)
+
+
 def get_supported_extensions() -> list:
     """Return list of supported audio/video file extensions."""
     return [

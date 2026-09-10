@@ -32,6 +32,11 @@ IMPORT_TO_PACKAGE = {
     "dotenv": "python-dotenv",
     "google.cloud": "google-cloud",
     "pkg_resources": "setuptools",
+    # "google" is a namespace shared by several packages. Everything this
+    # project imports under it (google.oauth2, google.auth.transport) comes
+    # from google-auth.
+    "google": "google-auth",
+    "googleapiclient": "google-api-python-client",
 }
 
 # ── Imports that are intentionally optional / platform-specific ────────────────
