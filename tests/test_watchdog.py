@@ -194,3 +194,96 @@ def test_speaker_id_is_driven_by_arguments_not_saved_settings(monkeypatch):
     assert (on.enable_speaker_id, bool(on.hf_token)) == (True, True)
     assert off.enable_speaker_id is False
     assert bool(no_token.hf_token) is False
+
+
+# --- GUI-side stall warning ---------------------------------------------------
+#
+# The runner's own check cannot fire while faster-whisper is wedged inside a
+# blocking call, because the loop body is never reached. The window polls from
+# the GUI event loop, which keeps running when the worker thread does not.
+
+
+class _FakeWorker:
+    def __init__(self, quiet_for, running=True):
+        self._quiet = quiet_for
+        self._running = running
+
+    def seconds_since_last_segment(self):
+        return self._quiet
+
+    def isRunning(self):
+        return self._running
+
+
+def make_window(qt_app):
+    from src.ui.main_window import MainWindow
+
+    return MainWindow()
+
+
+def test_no_warning_while_segments_are_arriving(qt_app):
+    window = make_window(qt_app)
+    try:
+        window.transcription_worker = _FakeWorker(quiet_for=5)
+        window._stall_warned = False
+
+        window._check_for_stall()
+
+        assert "No new speech" not in window.preview_text.toPlainText()
+    finally:
+        window.close()
+
+
+def test_warns_once_when_the_pipeline_goes_quiet(qt_app):
+    from src.ui.main_window import MainWindow
+
+    window = make_window(qt_app)
+    try:
+        window.transcription_worker = _FakeWorker(
+            quiet_for=MainWindow.STALL_WARN_AFTER_S + 60
+        )
+        window._stall_warned = False
+
+        window._check_for_stall()
+        window._check_for_stall()  # still stalled; must not spam
+        window._check_for_stall()
+
+        shown = window.preview_text.toPlainText()
+        assert shown.count("No new speech") == 1
+        assert "Still working" in shown
+    finally:
+        window.close()
+
+
+def test_warning_rearms_after_recovery(qt_app):
+    from src.ui.main_window import MainWindow
+
+    window = make_window(qt_app)
+    try:
+        stalled = _FakeWorker(quiet_for=MainWindow.STALL_WARN_AFTER_S + 60)
+        window.transcription_worker = stalled
+        window._stall_warned = False
+        window._check_for_stall()
+
+        stalled._quiet = 1  # segments start flowing again
+        window._check_for_stall()
+        stalled._quiet = MainWindow.STALL_WARN_AFTER_S + 60  # and stall again
+        window._check_for_stall()
+
+        assert window.preview_text.toPlainText().count("No new speech") == 2
+    finally:
+        window.close()
+
+
+def test_watch_stops_itself_when_the_worker_finishes(qt_app):
+    window = make_window(qt_app)
+    try:
+        window._start_stall_watch()
+        assert window._stall_timer.isActive()
+
+        window.transcription_worker = _FakeWorker(quiet_for=0, running=False)
+        window._check_for_stall()
+
+        assert not window._stall_timer.isActive()
+    finally:
+        window.close()

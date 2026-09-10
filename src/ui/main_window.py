@@ -179,6 +179,10 @@ class MainWindow(QMainWindow):
         self._slider_pressed = False
         self._audio_loaded = False
 
+        # Stall watch (see _start_stall_watch)
+        self._stall_timer = None
+        self._stall_warned = False
+
         self._setup_ui()
         self._setup_menu()
         self._connect_media_signals()
@@ -741,6 +745,51 @@ class MainWindow(QMainWindow):
         self.transcription_worker.completed.connect(self._on_transcription_complete)
         self.transcription_worker.error.connect(self._on_transcription_error)
         self.transcription_worker.start()
+        self._start_stall_watch()
+
+    # --- stall watch ---
+
+    # How quiet the pipeline has to go before we say so, and how often to look.
+    STALL_WARN_AFTER_S = 120
+    STALL_POLL_MS = 15000
+
+    def _start_stall_watch(self):
+        """Warn if the pipeline goes quiet for a long time.
+
+        The runner's own check only fires when the segment generator yields, so
+        it cannot notice faster-whisper wedged inside a blocking call. This
+        timer lives on the GUI event loop and therefore keeps running when the
+        worker thread is stuck, which is exactly the case worth reporting.
+        It only warns; nothing here can safely interrupt native inference.
+        """
+        self._stall_warned = False
+        if self._stall_timer is None:
+            self._stall_timer = QTimer(self)
+            self._stall_timer.timeout.connect(self._check_for_stall)
+        self._stall_timer.start(self.STALL_POLL_MS)
+
+    def _stop_stall_watch(self):
+        if self._stall_timer is not None:
+            self._stall_timer.stop()
+
+    def _check_for_stall(self):
+        worker = self.transcription_worker
+        if worker is None or not worker.isRunning():
+            self._stop_stall_watch()
+            return
+
+        quiet_for = worker.seconds_since_last_segment()
+        if quiet_for < self.STALL_WARN_AFTER_S:
+            self._stall_warned = False
+            return
+
+        # One warning per stall, not one every poll.
+        if not self._stall_warned:
+            self._stall_warned = True
+            self._on_status_message(
+                f"[Still working. No new speech for {quiet_for / 60:.0f} minutes; "
+                f"long silences and dense audio both look like this.]"
+            )
 
     def _on_transcription_progress(self, percent: float, eta_seconds: int):
         now = int(time.time() * 1000)
@@ -815,6 +864,7 @@ class MainWindow(QMainWindow):
     def _on_transcription_complete(self, vtt_path: str, txt_path: str, json_path: str, audio_path: str):
         import subprocess
 
+        self._stop_stall_watch()
         if self.current_item:
             self.current_item.status = "completed"
             self.current_item.audio_path = audio_path
@@ -840,6 +890,7 @@ class MainWindow(QMainWindow):
         self.process_next()
 
     def _on_transcription_error(self, error_msg: str):
+        self._stop_stall_watch()
         if self.current_item:
             self.current_item.status = "error"
             self.current_item.update_display()
@@ -856,6 +907,7 @@ class MainWindow(QMainWindow):
         self.error_label.setVisible(True)
 
     def cancel_current(self):
+        self._stop_stall_watch()
         if self.transcription_worker:
             self.transcription_worker.cancel()
             # Wait briefly for thread to acknowledge cancellation
