@@ -65,6 +65,27 @@ def mock_hf_token():
     return "hf_mock_test_token_12345"
 
 
+@pytest.fixture
+def scoped_settings(tmp_path, monkeypatch):
+    """Redirect src.core.config at a throwaway ini file.
+
+    Otherwise these tests read and write the developer's real preferences at
+    ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist, and
+    a failure mid-test leaves the setting flipped.
+
+    QSettings.setPath cannot be used for this: on macOS it has no effect on
+    NativeFormat, which is what the production accessor uses. Patching the
+    _settings() helper is the only isolation that actually holds.
+    """
+    from PyQt6.QtCore import QSettings
+
+    from src.core import config
+
+    store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(config, "_settings", lambda: store)
+    return store
+
+
 @pytest.fixture(scope="session")
 def qt_app():
     """One offscreen QApplication for widget tests.

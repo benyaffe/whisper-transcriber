@@ -204,32 +204,52 @@ class TestFileUtilities:
 # =============================================================================
 
 class TestSettings:
-    """Test settings persistence."""
+    """Settings persistence, against a scoped store rather than the real one.
 
-    def test_speaker_id_default_disabled(self):
-        """Speaker ID should be disabled by default."""
-        from PyQt6.QtCore import QSettings
-        settings = QSettings("WhisperTranscriber", "TestSettings")
-        settings.clear()
+    Both tests here used to write the developer's actual macOS preferences,
+    and the default-value one could never fail: `assert x == False or True`
+    parses as `assert (x == False) or True`. It also cleared
+    QSettings("WhisperTranscriber", "TestSettings"), a different plist from
+    the one under test, so it asserted nothing about nothing.
+    """
 
+    def test_speaker_id_defaults_to_disabled(self, scoped_settings):
         from src.core.config import is_speaker_id_enabled
-        # With cleared settings, should default to False
-        assert is_speaker_id_enabled() == False or True  # May be True if previously set
 
-    def test_toggle_speaker_id(self):
-        """Should persist speaker ID toggle state."""
-        from src.core.config import set_speaker_id_enabled, is_speaker_id_enabled
+        assert is_speaker_id_enabled() is False
 
-        original = is_speaker_id_enabled()
+    def test_toggle_speaker_id_round_trips(self, scoped_settings):
+        from src.core.config import is_speaker_id_enabled, set_speaker_id_enabled
 
         set_speaker_id_enabled(True)
-        assert is_speaker_id_enabled() == True
+        assert is_speaker_id_enabled() is True
 
         set_speaker_id_enabled(False)
-        assert is_speaker_id_enabled() == False
+        assert is_speaker_id_enabled() is False
 
-        # Restore original
-        set_speaker_id_enabled(original)
+    def test_value_is_stored_under_the_documented_key(self, scoped_settings):
+        from src.core.config import SETTINGS_SPEAKER_ID_ENABLED, set_speaker_id_enabled
+
+        set_speaker_id_enabled(True)
+
+        assert scoped_settings.value(SETTINGS_SPEAKER_ID_ENABLED, type=bool) is True
+
+    def test_settings_identity_is_pinned(self):
+        """Guards a migration hazard rather than behavior.
+
+        The org/app pair resolves to
+        ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist,
+        where every existing install already has its setting. main.py sets the
+        application name to "Whisper Transcriber" WITH A SPACE, so switching to
+        a default-constructed QSettings() would silently read a different file
+        and reset everyone's preference.
+        """
+        from src.core import config
+
+        assert (config._SETTINGS_ORG, config._SETTINGS_APP) == (
+            "WhisperTranscriber",
+            "WhisperTranscriber",
+        )
 
 
 # =============================================================================
