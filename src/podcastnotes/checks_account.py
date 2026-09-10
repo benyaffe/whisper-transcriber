@@ -17,31 +17,46 @@ PROBE_DOC_BODY = "# Connection check\n\nCreated and deleted automatically.\n"
 
 
 def check_google():
-    """Signed in, with a refresh token that still works."""
-    if not auth.is_configured():
-        return failed(
-            "Google sign-in has not been set up for your organisation yet.",
-            remedy="An administrator needs to create the sign-in once, for "
-                   "everybody. Send them the setup notes.",
-            # Nothing to press. Until the OAuth client exists there is no
-            # sign-in to start, and a button that cannot work is worse than
-            # no button.
-            fixable=False,
-        )
+    """Signed in, with credentials that still work right now.
 
+    Organisations that put Google Cloud behind a session policy expire these
+    every day or two by design, so this failing is routine rather than
+    alarming and the wording says so.
+    """
     credentials = auth.stored_credentials()
+
     if credentials is None:
+        if not auth.is_configured():
+            return failed(
+                "Google sign-in has not been set up for this app yet.",
+                remedy="Somebody with access to your Google Cloud console "
+                       "creates the sign-in once, for everybody. It takes "
+                       "about ten minutes and never needs doing again.",
+                # Nothing to press. Until the OAuth client exists there is no
+                # sign-in to start, and a button that cannot work is worse
+                # than no button.
+                fixable=False,
+            )
         return failed(
             "Not signed in.",
             remedy="Sign in with your work Google account.",
+            action="Sign in",
         )
 
     try:
         auth.ensure_fresh(credentials)
-    except Exception as e:
+    except Exception:
         return failed(
-            f"The saved sign-in is no longer valid ({type(e).__name__}).",
-            remedy="Sign in again.",
+            "Your Google sign-in has expired.",
+            remedy="This is normal: your organisation expires these every "
+                   "day or two. Signing in again takes a few seconds.",
+            action="Sign in again",
+            fixable=auth.is_configured(),
+        )
+
+    if auth.credentials_source() == auth.SOURCE_GCLOUD:
+        return ok(
+            "Using your gcloud sign-in, which covers Claude but not publishing"
         )
 
     who = auth.account_email()
@@ -57,12 +72,13 @@ def check_claude():
     """
     from src.podcastnotes.llm import client as llm
 
-    project = auth.project_id()
+    project = auth.project_id() or _guess_project()
     if not project:
         return failed(
             "No Google Cloud project chosen.",
             remedy="Pick the project your team is billed to. Everyone uses "
                    "their own, so ask your team which one.",
+            action="Choose project",
         )
 
     try:
@@ -89,7 +105,24 @@ def check_claude():
             "Claude replied with nothing.",
             remedy="Try again. If it keeps happening, copy the diagnostics.",
         )
+
+    # Only remembered once it has been shown to work. Saving a guess before
+    # proving it would leave somebody with a silently wrong billing project
+    # and no reason to look at the setting again.
+    if project != auth.project_id():
+        auth.set_project_id(project)
+
     return ok(f"Working, on project {project}")
+
+
+def _guess_project() -> str:
+    """A sensible default so most people never see the project picker.
+
+    Only the project the machine is already pointed at. Anything cleverer
+    risks billing somebody's work to a cost center they do not own, which is
+    a mistake they would not notice until an invoice arrived.
+    """
+    return auth.default_project()
 
 
 def check_drive():
@@ -105,6 +138,16 @@ def check_drive():
     credentials = auth.stored_credentials()
     if credentials is None:
         return failed("Not signed in to Google.", remedy="Sign in first.")
+
+    if not auth.covers_drive():
+        # Calling anyway would produce a scope error that reads like a bug.
+        return failed(
+            "Your gcloud sign-in does not allow creating documents.",
+            remedy="Sign in to Google inside the app. That grants the narrow "
+                   "permission needed to publish, which gcloud does not.",
+            action="Sign in",
+            fixable=auth.is_configured(),
+        )
 
     auth.ensure_fresh(credentials)
     service = build("drive", "v3", credentials=credentials, cache_discovery=False)
@@ -149,12 +192,14 @@ def check_glean():
             "No Glean address set.",
             remedy="Enter your company's Glean address. It is the one in your "
                    "browser when you use Glean.",
+            action="Add address",
         )
     if not glean.has_credential():
         return failed(
             "Not signed in to Glean.",
             remedy="Sign in with your normal Glean account. It opens your "
                    "browser and takes a few seconds.",
+            action="Sign in",
         )
 
     results = glean.search(GLEAN_PROBE_QUERY, page_size=1)

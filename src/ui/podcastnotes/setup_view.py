@@ -160,6 +160,7 @@ class CheckRow(QFrame):
 
         self._url = result.url
         self.link_button.setVisible(bool(result.url))
+        self.fix_button.setText(result.action)
         # Nothing to click on a check that is only waiting, on one nobody can
         # ever act on, or on this particular failure when it is somebody
         # else's to fix. A button that does nothing is worse than no button.

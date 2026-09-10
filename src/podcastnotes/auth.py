@@ -143,28 +143,74 @@ def run_sign_in(open_browser: bool = True):
     return credentials
 
 
-def stored_credentials():
-    """Credentials rebuilt from the saved refresh token, or None if signed out.
+SOURCE_APP = "app"
+SOURCE_GCLOUD = "gcloud"
 
-    The access token is deliberately left empty. Both the Anthropic client and
-    google-api-python-client refresh on demand, and an access token cached in
-    the Keychain would go stale within the hour.
+
+def stored_credentials():
+    """Whatever Google credentials this machine has, or None.
+
+    The app's own sign-in first, because it is the one that covers Drive as
+    well. Application Default Credentials second, which is what somebody with
+    gcloud already has: it carries cloud-platform and therefore Claude, but
+    not drive.file, so publishing still needs the app's own sign-in.
+
+    The access token is deliberately not cached. Both the Anthropic client and
+    google-api-python-client refresh on demand, and a token in the Keychain
+    would be stale within the hour.
     """
     from google.oauth2.credentials import Credentials
 
     refresh_token = get_refresh_token()
-    if not refresh_token:
+    if refresh_token:
+        config = client_config()
+        return Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri=TOKEN_URI,
+            client_id=config["client_id"],
+            client_secret=config["client_secret"],
+            scopes=GOOGLE_SCOPES,
+        )
+
+    return application_default_credentials()
+
+
+def application_default_credentials():
+    """What `gcloud auth application-default login` leaves behind, if anything.
+
+    Nobody is asked to install gcloud. This exists because people who already
+    have it should not have to sign in twice, and because it makes the Claude
+    path testable before the OAuth client exists.
+    """
+    try:
+        import google.auth
+
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        return credentials
+    except Exception:
         return None
 
-    config = client_config()
-    return Credentials(
-        token=None,
-        refresh_token=refresh_token,
-        token_uri=TOKEN_URI,
-        client_id=config["client_id"],
-        client_secret=config["client_secret"],
-        scopes=GOOGLE_SCOPES,
-    )
+
+def credentials_source() -> str:
+    """Which of the two is in use, since they do not grant the same things."""
+    if get_refresh_token():
+        return SOURCE_APP
+    if application_default_credentials() is not None:
+        return SOURCE_GCLOUD
+    return ""
+
+
+def covers_drive() -> bool:
+    """Whether the current credentials can create a document.
+
+    gcloud's default credentials carry cloud-platform but not drive.file, so
+    Claude works and publishing does not. Saying so up front beats discovering
+    it after a trip has finished running.
+    """
+    return credentials_source() == SOURCE_APP
 
 
 def ensure_fresh(credentials):
@@ -245,6 +291,34 @@ def set_project_id(value: str):
     _settings().setValue(SETTINGS_GOOGLE_PROJECT, value or "")
 
 
+def default_project() -> str:
+    """The project gcloud is already pointed at, if any.
+
+    Worth having on its own because listing every project needs the Cloud
+    Resource Manager API enabled, which it often is not, while this needs
+    nothing. Somebody who already uses Vertex is almost always pointed at the
+    project they want.
+    """
+    try:
+        import google.auth
+
+        _, project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        return project or ""
+    except Exception:
+        return ""
+
+
+class ProjectListUnavailable(Exception):
+    """The project list cannot be read, which is not the same as having none.
+
+    Cloud Resource Manager is frequently left disabled. Reporting that as "you
+    have no projects" would be wrong and would send somebody to ask for access
+    they already have.
+    """
+
+
 def list_projects(credentials) -> list[dict]:
     """The projects this person can use, for the picker.
 
@@ -252,13 +326,19 @@ def list_projects(credentials) -> list[dict]:
     offer something that will fail on first use.
     """
     from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
 
     service = build(
         "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
     )
     projects, request = [], service.projects().list()
     while request is not None:
-        response = request.execute()
+        try:
+            response = request.execute()
+        except HttpError as e:
+            if e.status_code in (403, 404):
+                raise ProjectListUnavailable(str(e))
+            raise
         for project in response.get("projects", []):
             if project.get("lifecycleState") != "ACTIVE":
                 continue

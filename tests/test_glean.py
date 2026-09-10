@@ -12,8 +12,19 @@ Run with: python -m pytest tests/test_glean.py -v
 
 import pytest
 
-from src.podcastnotes import glean
+from src.podcastnotes import glean, glean_auth
 from src.podcastnotes.readiness import State
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_sign_in(monkeypatch):
+    """Ignore whatever this machine happens to be signed in to.
+
+    A real Glean sign-in lives in the developer's Keychain, so without this
+    every test of the signed-out path passes here and fails on a machine that
+    has never signed in, or the reverse. Tests that want a sign-in say so.
+    """
+    monkeypatch.setattr(glean_auth, "signed_in", lambda: False)
 
 
 # --- the address somebody pastes ----------------------------------------------
@@ -83,6 +94,15 @@ def test_the_token_is_read_at_request_time_not_captured(monkeypatch):
     assert callable(seen["api_token"]), "the token should be resolved lazily"
     assert seen["api_token"]() == "glean-token-1"
     assert seen["instance"] == "acme"
+
+
+def test_a_browser_sign_in_is_used_ahead_of_a_pasted_token(monkeypatch):
+    monkeypatch.setattr(glean_auth, "signed_in", lambda: True)
+    monkeypatch.setattr(glean_auth, "access_token", lambda where: "oauth-token")
+    monkeypatch.setattr(glean, "instance", lambda: "acme")
+    monkeypatch.setattr(glean, "get_token", lambda: "pasted-token")
+
+    assert glean.credential() == "oauth-token"
 
 
 def test_a_field_containing_only_spaces_clears_the_token(monkeypatch):

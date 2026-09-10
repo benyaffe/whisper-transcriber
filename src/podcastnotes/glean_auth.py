@@ -116,40 +116,66 @@ def _pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _serve_one_callback(server, holder: dict):
-    from http.server import BaseHTTPRequestHandler
+CALLBACK_PATH = "/oauth/callback"
+
+
+def _build_callback_server(holder: dict, done: threading.Event):
+    """A loopback server that waits for the redirect and ignores everything else.
+
+    It stays up until the callback actually arrives. An earlier version served
+    exactly one request and then closed, which failed in the field: browsers
+    open speculative connections and ask for /favicon.ico, so the single
+    request was routinely spent on something that was not the callback and the
+    real redirect got "connection refused" with the authorisation code sitting
+    in the address bar.
+    """
+    from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path != CALLBACK_PATH:
+                self.send_error(404)
+                return
+
+            query = urllib.parse.parse_qs(parsed.query)
             holder["code"] = query.get("code", [""])[0]
             holder["state"] = query.get("state", [""])[0]
             holder["error"] = query.get("error", [""])[0]
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(
+
+            body = (
                 b"<html><body style='font-family:system-ui;padding:3em'>"
                 b"<h2>Signed in to Glean.</h2>"
                 b"<p>You can close this tab and go back to the app.</p>"
                 b"</body></html>"
             )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            done.set()
 
         def log_message(self, *args):
-            pass  # the default handler prints to stderr
+            pass  # the default implementation writes to stderr
 
-    server.RequestHandlerClass = Handler
-    server.handle_request()
+    # Port 0 lets the OS choose, so a busy port cannot wedge the sign-in.
+    return HTTPServer(("127.0.0.1", 0), Handler)
 
 
-def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 180) -> str:
+def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 600) -> str:
     """Register, sign in through the browser, and save the result.
 
     Returns the account's refresh token. Blocks until the browser comes back or
     the timeout expires, so it does not belong on the GUI thread.
+
+    Ten minutes rather than three. Signing in can mean a redirect through an
+    identity provider and a prompt on a phone, and a timeout that expires
+    mid-approval closes the port while the authorisation code is still in
+    flight, which produces "connection refused" at the worst possible moment.
     """
     import webbrowser
-    from http.server import HTTPServer
 
     metadata = discover(instance)
     if not supports_self_registration(metadata):
@@ -157,10 +183,10 @@ def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 180) ->
             "This Glean instance does not let applications register themselves."
         )
 
-    # Port 0 lets the OS choose, so a busy port cannot wedge the sign-in.
-    server = HTTPServer(("127.0.0.1", 0), None)
-    server.timeout = timeout
-    redirect_uri = f"http://127.0.0.1:{server.server_port}/oauth/callback"
+    holder: dict = {}
+    done = threading.Event()
+    server = _build_callback_server(holder, done)
+    redirect_uri = f"http://127.0.0.1:{server.server_port}{CALLBACK_PATH}"
 
     client_id = register(metadata, redirect_uri)
     verifier, challenge = _pkce_pair()
@@ -178,16 +204,15 @@ def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 180) ->
         }
     )
 
-    holder: dict = {}
-    listener = threading.Thread(
-        target=_serve_one_callback, args=(server, holder), daemon=True
-    )
+    listener = threading.Thread(target=server.serve_forever, daemon=True)
     listener.start()
-
-    if open_browser:
-        webbrowser.open(url)
-    listener.join(timeout)
-    server.server_close()
+    try:
+        if open_browser:
+            webbrowser.open(url)
+        done.wait(timeout)
+    finally:
+        server.shutdown()
+        server.server_close()
 
     if holder.get("error"):
         raise SignInFailed(f"Glean refused the sign-in: {holder['error']}")

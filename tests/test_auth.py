@@ -21,10 +21,18 @@ from src.podcastnotes.readiness import State
 
 @pytest.fixture(autouse=True)
 def no_ambient_client(monkeypatch):
-    """Stop a developer's own env vars leaking into the tests."""
+    """Stop the developer's own machine leaking into the tests.
+
+    Both halves matter. The env vars would supply an OAuth client that a
+    colleague's checkout does not have. Application Default Credentials are
+    worse: gcloud is installed here and not on the build machine, so anything
+    exercising the signed-out path would pass in one place and fail in the
+    other. Tests that want gcloud credentials say so.
+    """
     monkeypatch.delenv(auth.CLIENT_ID_ENV, raising=False)
     monkeypatch.delenv(auth.CLIENT_SECRET_ENV, raising=False)
     monkeypatch.delenv(auth.CLIENT_FILE_ENV, raising=False)
+    monkeypatch.setattr(auth, "application_default_credentials", lambda: None)
 
 
 # --- the OAuth client, which an admin has to create ---------------------------
@@ -131,6 +139,138 @@ def test_the_refresh_token_shares_the_existing_keychain_service():
     from src.core.config import KEYRING_SERVICE
 
     assert auth.KEYRING_SERVICE == KEYRING_SERVICE == "WhisperTranscriber"
+
+
+# --- two sources of credentials -----------------------------------------------
+
+
+def test_the_apps_own_sign_in_wins_over_gcloud(monkeypatch):
+    """It is the only one that also covers publishing."""
+    monkeypatch.setenv(auth.CLIENT_ID_ENV, "id")
+    monkeypatch.setenv(auth.CLIENT_SECRET_ENV, "secret")
+    monkeypatch.setattr(auth, "get_refresh_token", lambda: "app-refresh")
+    monkeypatch.setattr(auth, "application_default_credentials", lambda: object())
+
+    assert auth.credentials_source() == auth.SOURCE_APP
+    assert auth.covers_drive() is True
+
+
+def test_gcloud_credentials_are_used_when_there_is_nothing_else(monkeypatch):
+    """Nobody is asked to install gcloud. Somebody who already has it should
+    not have to sign in twice."""
+    sentinel = object()
+    monkeypatch.setattr(auth, "get_refresh_token", lambda: "")
+    monkeypatch.setattr(auth, "application_default_credentials", lambda: sentinel)
+
+    assert auth.stored_credentials() is sentinel
+    assert auth.credentials_source() == auth.SOURCE_GCLOUD
+
+
+def test_gcloud_credentials_do_not_cover_publishing(monkeypatch):
+    """They carry cloud-platform but not drive.file, so Claude works and
+    creating a document does not. Saying so up front beats finding out after
+    a trip has finished running."""
+    monkeypatch.setattr(auth, "get_refresh_token", lambda: "")
+    monkeypatch.setattr(auth, "application_default_credentials", lambda: object())
+
+    assert auth.covers_drive() is False
+
+
+def test_no_credentials_at_all(monkeypatch):
+    monkeypatch.setattr(auth, "get_refresh_token", lambda: "")
+    monkeypatch.setattr(auth, "application_default_credentials", lambda: None)
+
+    assert auth.stored_credentials() is None
+    assert auth.credentials_source() == ""
+
+
+def test_the_drive_check_refuses_to_call_with_gcloud_credentials(monkeypatch):
+    """Calling anyway produces a scope error that reads like a bug."""
+    from src.podcastnotes import checks_account
+
+    monkeypatch.setattr(auth, "stored_credentials", lambda: object())
+    monkeypatch.setattr(auth, "covers_drive", lambda: False)
+    monkeypatch.setattr(auth, "is_configured", lambda: True)
+
+    result = checks_account.check_drive()
+
+    assert result.state is State.FAILED
+    assert "gcloud" in result.detail
+    assert result.action == "Sign in"
+
+
+def test_an_expired_sign_in_is_described_as_routine(monkeypatch):
+    """Organisations that put Google Cloud behind a session policy expire
+    these every day or two by design. Wording it as a fault would have people
+    reporting a bug every morning."""
+    from src.podcastnotes import checks_account
+
+    monkeypatch.setattr(auth, "is_configured", lambda: True)
+    monkeypatch.setattr(auth, "stored_credentials", lambda: object())
+
+    def expired(credentials):
+        raise RuntimeError("invalid_grant: token expired")
+
+    monkeypatch.setattr(auth, "ensure_fresh", expired)
+
+    result = checks_account.check_google()
+
+    assert result.state is State.FAILED
+    assert "expired" in result.detail.lower()
+    assert "normal" in result.remedy.lower()
+    assert result.action == "Sign in again"
+
+
+def test_a_gcloud_signed_in_google_row_says_what_it_does_not_cover(monkeypatch):
+    from src.podcastnotes import checks_account
+
+    monkeypatch.setattr(auth, "stored_credentials", lambda: object())
+    monkeypatch.setattr(auth, "ensure_fresh", lambda c: c)
+    monkeypatch.setattr(auth, "credentials_source", lambda: auth.SOURCE_GCLOUD)
+
+    result = checks_account.check_google()
+
+    assert result.state is State.OK
+    assert "publishing" in result.detail
+
+
+# --- listing projects ---------------------------------------------------------
+
+
+def test_a_disabled_resource_manager_is_not_the_same_as_having_no_projects(monkeypatch):
+    """Cloud Resource Manager is usually left switched off. Reporting that as
+    "you have no projects" would send somebody to ask for access they have."""
+    from googleapiclient.errors import HttpError
+
+    class FakeRequest:
+        def execute(self):
+            raise HttpError(_FakeResp(403), b"API not enabled")
+
+    class FakeProjects:
+        def list(self):
+            return FakeRequest()
+
+    class FakeService:
+        def projects(self):
+            return FakeProjects()
+
+    import googleapiclient.discovery
+
+    monkeypatch.setattr(
+        googleapiclient.discovery, "build", lambda *a, **k: FakeService()
+    )
+
+    with pytest.raises(auth.ProjectListUnavailable):
+        auth.list_projects(object())
+
+
+class _FakeResp:
+    def __init__(self, status):
+        self.status = status
+        self.reason = "Forbidden"
+
+    def get(self, key, default=None):
+        return {"status": self.status}.get(key, default)
 
 
 # --- model and endpoint choices -----------------------------------------------
@@ -438,11 +578,49 @@ def test_sign_in_lets_the_os_pick_a_port(monkeypatch):
 # --- what a person is told ----------------------------------------------------
 
 
+def test_the_project_is_guessed_so_most_people_never_see_the_picker(monkeypatch):
+    """One fewer thing for a colleague to know about themselves."""
+    from src.podcastnotes import checks_account
+
+    saved = []
+    monkeypatch.setattr(auth, "project_id", lambda: "")
+    monkeypatch.setattr(auth, "default_project", lambda: "example-vertexai")
+    monkeypatch.setattr(auth, "set_project_id", lambda p: saved.append(p))
+    monkeypatch.setattr(llm, "probe", lambda project="", region="": "ready")
+
+    result = checks_account.check_claude()
+
+    assert result.state is State.OK
+    assert "example-vertexai" in result.detail
+    assert saved == ["example-vertexai"], "a working guess should be remembered"
+
+
+def test_a_guess_is_not_saved_until_it_has_worked(monkeypatch):
+    """Saving before proving leaves somebody with a silently wrong billing
+    project and no reason to look at the setting again."""
+    from src.podcastnotes import checks_account
+
+    saved = []
+    monkeypatch.setattr(auth, "project_id", lambda: "")
+    monkeypatch.setattr(auth, "default_project", lambda: "wrong-project")
+    monkeypatch.setattr(auth, "set_project_id", lambda p: saved.append(p))
+
+    def refuse(project="", region=""):
+        raise llm.ClaudeNotEnabled("wrong-project")
+
+    monkeypatch.setattr(llm, "probe", refuse)
+
+    checks_account.check_claude()
+
+    assert saved == [], "an unproven guess was written to settings"
+
+
 def test_no_project_chosen_is_explained_in_terms_of_cost_centers(monkeypatch):
     """Colleagues are on different projects, so this is not a bug to report."""
     from src.podcastnotes import checks_account
 
     monkeypatch.setattr(auth, "project_id", lambda: "")
+    monkeypatch.setattr(auth, "default_project", lambda: "")
 
     result = checks_account.check_claude()
 
@@ -491,9 +669,12 @@ def test_an_unconfigured_org_is_not_blamed_on_the_user(monkeypatch):
     result = checks_account.check_google()
 
     assert result.state is State.FAILED
-    assert "administrator" in result.remedy.lower()
-    assert "sign in" not in result.remedy.lower(), "this is not theirs to fix"
     assert result.fixable is False, "there is no button that could help"
+    # It is a one-off setup step somebody does in a console, and often that
+    # somebody is the person reading this. What must not happen is telling
+    # them to sign in, because there is nothing yet to sign in to.
+    assert "once" in result.remedy.lower()
+    assert "sign in with" not in result.remedy.lower(), "nothing to sign in to yet"
 
 
 def test_being_signed_out_does_tell_them_to_sign_in(monkeypatch):
@@ -618,6 +799,7 @@ def _install_fake_drive(monkeypatch, files):
 
     monkeypatch.setattr(auth_mod, "stored_credentials", lambda: object())
     monkeypatch.setattr(auth_mod, "ensure_fresh", lambda c: c)
+    monkeypatch.setattr(auth_mod, "covers_drive", lambda: True)
 
     class FakeService:
         def files(self):

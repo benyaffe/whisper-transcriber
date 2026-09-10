@@ -190,6 +190,115 @@ def test_a_rejected_refresh_says_what_glean_said(monkeypatch, fake_keychain):
         glean_auth.access_token("acme")
 
 
+# --- the loopback server ------------------------------------------------------
+#
+# This is where the sign-in actually broke in use: the browser asked for
+# something that was not the callback, the single-request server spent itself
+# on it and closed, and the real redirect arrived at a dead port. The user saw
+# "connection refused" with a valid authorisation code in the address bar.
+
+
+def _get(port, path):
+    import urllib.request
+
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as r:
+        return r.status, r.read()
+
+
+def test_a_stray_request_does_not_kill_the_callback():
+    """The reported failure, reproduced.
+
+    Browsers open speculative connections and ask for /favicon.ico. Serving
+    one request and closing meant the callback often never got a listener.
+    """
+    import threading
+    import urllib.error
+
+    holder, done = {}, threading.Event()
+    server = glean_auth._build_callback_server(holder, done)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_port
+
+        with pytest.raises(urllib.error.HTTPError):
+            _get(port, "/favicon.ico")  # spends the old server's single request
+
+        status, body = _get(port, f"{glean_auth.CALLBACK_PATH}?code=abc&state=xyz")
+
+        assert status == 200
+        assert b"Signed in" in body
+        assert holder["code"] == "abc"
+        assert holder["state"] == "xyz"
+        assert done.is_set()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_callback_server_survives_several_stray_requests():
+    import threading
+    import urllib.error
+
+    holder, done = {}, threading.Event()
+    server = glean_auth._build_callback_server(holder, done)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for path in ("/favicon.ico", "/", "/.well-known/whatever"):
+            with pytest.raises(urllib.error.HTTPError):
+                _get(server.server_port, path)
+
+        status, _ = _get(server.server_port, f"{glean_auth.CALLBACK_PATH}?code=late")
+
+        assert status == 200
+        assert holder["code"] == "late"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_refusal_from_the_provider_is_carried_back():
+    import threading
+
+    holder, done = {}, threading.Event()
+    server = glean_auth._build_callback_server(holder, done)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _get(server.server_port, f"{glean_auth.CALLBACK_PATH}?error=access_denied")
+
+        assert holder["error"] == "access_denied"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_sign_in_keeps_the_server_up_rather_than_serving_one_request():
+    """Pins the fix in the caller too.
+
+    The tests above drive the server directly, so reverting run_sign_in to a
+    single handle_request would leave them green while putting the original
+    bug straight back.
+    """
+    import inspect
+
+    source = inspect.getsource(glean_auth.run_sign_in)
+
+    assert "serve_forever" in source
+    assert "handle_request" not in source, "one request is not enough"
+
+
+def test_the_timeout_allows_for_an_identity_provider_and_a_phone():
+    """Three minutes expired mid-approval and closed the port while the code
+    was still in flight."""
+    import inspect
+
+    signature = inspect.signature(glean_auth.run_sign_in)
+
+    assert signature.parameters["timeout"].default >= 600
+
+
 # --- what is stored -----------------------------------------------------------
 
 

@@ -112,6 +112,7 @@ def check_huggingface():
             remedy="Create a free HuggingFace account, make a read token, "
                    "and paste it in Settings.",
             url=HF_TOKEN_URL,
+            action="Add token",
         )
 
     valid, message = validate_hf_token(token)

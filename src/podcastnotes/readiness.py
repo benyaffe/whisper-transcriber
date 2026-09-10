@@ -71,6 +71,10 @@ class Result:
     # the OAuth client there is nothing to press, and offering a button that
     # cannot work is the exact failure this screen exists to avoid.
     fixable: bool = True
+    # What the button should say. "Fix" is vague, and it belongs here rather
+    # than on the Check because one check's button changes with the failure:
+    # Glean needs an address before it can offer a sign-in.
+    action: str = "Fix"
 
     @property
     def ok(self) -> bool:
@@ -81,8 +85,21 @@ def ok(detail: str = "") -> Result:
     return Result(State.OK, detail=detail)
 
 
-def failed(detail: str, remedy: str = "", url: str = "", fixable: bool = True) -> Result:
-    return Result(State.FAILED, detail=detail, remedy=remedy, url=url, fixable=fixable)
+def failed(
+    detail: str,
+    remedy: str = "",
+    url: str = "",
+    fixable: bool = True,
+    action: str = "Fix",
+) -> Result:
+    return Result(
+        State.FAILED,
+        detail=detail,
+        remedy=remedy,
+        url=url,
+        fixable=fixable,
+        action=action,
+    )
 
 
 def blocked(detail: str) -> Result:

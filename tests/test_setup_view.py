@@ -306,13 +306,17 @@ def test_fixing_glean_asks_for_the_address_first(qt_app, monkeypatch):
         view.deleteLater()
 
 
-def test_fixing_anything_other_than_google_opens_settings(qt_app):
-    """Pasted values live in one place rather than seven bespoke dialogs."""
-    view = build(qt_app, [stub("glean", failed("no token"))])
+def test_fixing_a_pasted_value_opens_settings(qt_app):
+    """Pasted values live in one place rather than several bespoke dialogs.
+
+    HuggingFace rather than Glean, because Glean now signs in through a
+    browser and is no longer an example of this.
+    """
+    view = build(qt_app, [stub("huggingface", failed("no token"))])
     asked = []
     view.settings_requested.connect(lambda: asked.append(True))
     try:
-        view._fix("glean")
+        view._fix("huggingface")
 
         assert asked == [True]
     finally:

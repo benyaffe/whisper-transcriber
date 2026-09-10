@@ -33,6 +33,16 @@ class _ProjectsWorker(QThread):
 
         try:
             self.done.emit(auth.list_projects(self._credentials), "")
+        except auth.ProjectListUnavailable:
+            # Common, and not an error worth showing. Google will not list
+            # projects unless the Cloud Resource Manager API is switched on,
+            # which it usually is not. Fall back to the project gcloud is
+            # already pointed at, which is nearly always the right one.
+            default = auth.default_project()
+            if default:
+                self.done.emit([{"id": default, "name": default}], "")
+            else:
+                self.done.emit([], "LIST_UNAVAILABLE")
         except Exception as e:
             self.done.emit([], str(e))
 
@@ -230,6 +240,12 @@ class SettingsDialog(QDialog):
 
     def _on_projects_found(self, projects: list, error: str):
         self.find_projects_btn.setEnabled(True)
+        if error == "LIST_UNAVAILABLE":
+            self.project_status.setText(
+                "Your account cannot list projects, which is normal. Type the "
+                "project id instead; your team will know it."
+            )
+            return
         if error:
             self.project_status.setText(f"Could not list your projects: {error}")
             return
