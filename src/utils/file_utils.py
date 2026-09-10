@@ -134,8 +134,14 @@ def get_resource_path(name: str) -> str:
     means, since for some it is fatal and for others it is a default.
     """
     if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', '')
         possible_dirs = [
-            getattr(sys, '_MEIPASS', ''),
+            # The spec bundles data under a resources/ subdirectory to keep the
+            # bundle tidy, so that is checked before the unpack root. Getting
+            # this pair out of step is silent: the file is present in the app
+            # and the lookup simply never finds it.
+            os.path.join(meipass, 'resources') if meipass else '',
+            meipass,
             os.path.join(os.path.dirname(sys.executable), 'resources'),
             os.path.abspath(os.path.join(
                 os.path.dirname(sys.executable), '..', 'Resources')),

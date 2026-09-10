@@ -51,6 +51,22 @@ datas = [
     (os.path.join(project_dir, 'VERSION'), '.'),
 ]
 
+# The Google OAuth client, which is what lets people sign in from inside the
+# app rather than installing gcloud. Optional at build time on purpose: the
+# app reports "sign-in has not been set up" rather than failing to start, so a
+# build without it still produces a working transcriber.
+#
+# For an installed application Google does not treat the "client secret" as
+# confidential. It ships inside every desktop app that does browser sign-in,
+# and the security comes from the loopback redirect and PKCE.
+google_oauth_client = os.path.join(resources_dir, 'google_oauth_client.json')
+if os.path.exists(google_oauth_client):
+    datas.append((google_oauth_client, 'resources'))
+else:
+    print('NOTE: resources/google_oauth_client.json is absent. '
+          'The bundle will build, and Google sign-in will report itself as '
+          'not set up.')
+
 # Add faster_whisper assets (silero VAD model)
 if fw_assets_dir and os.path.exists(fw_assets_dir):
     datas.append((fw_assets_dir, 'faster_whisper/assets'))
