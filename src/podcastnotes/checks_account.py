@@ -150,11 +150,11 @@ def check_glean():
             remedy="Enter your company's Glean address. It is the one in your "
                    "browser when you use Glean.",
         )
-    if not glean.get_token():
+    if not glean.has_credential():
         return failed(
-            "No Glean credential.",
-            remedy="Create a personal Glean token and paste it in Settings.",
-            url="https://app.glean.com/admin/platform/tokenManagement",
+            "Not signed in to Glean.",
+            remedy="Sign in with your normal Glean account. It opens your "
+                   "browser and takes a few seconds.",
         )
 
     results = glean.search(GLEAN_PROBE_QUERY, page_size=1)

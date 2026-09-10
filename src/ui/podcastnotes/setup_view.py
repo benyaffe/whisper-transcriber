@@ -67,15 +67,24 @@ class ChecksWorker(QThread):
 
 
 class SignInWorker(QThread):
-    """The Google loopback flow, which blocks until the browser comes back."""
+    """A browser sign-in, which blocks until the browser comes back."""
 
     done = pyqtSignal(bool, str)
 
-    def run(self):
-        from src.podcastnotes import auth
+    def __init__(self, which: str, parent=None):
+        super().__init__(parent)
+        self.which = which
 
+    def run(self):
         try:
-            auth.run_sign_in()
+            if self.which == "google":
+                from src.podcastnotes import auth
+
+                auth.run_sign_in()
+            else:
+                from src.podcastnotes import glean, glean_auth
+
+                glean_auth.run_sign_in(glean.instance())
             self.done.emit(True, "")
         except Exception as e:
             self.done.emit(False, str(e))
@@ -276,23 +285,34 @@ class SetupView(QWidget):
 
     def _fix(self, key: str):
         if key == "google":
-            self._sign_in_to_google()
+            self._sign_in("google")
+        elif key == "glean" and self._glean_can_sign_in():
+            self._sign_in("glean")
         else:
             # Everything else is a value somebody pastes, and those all live in
-            # one place rather than in seven bespoke dialogs.
+            # one place rather than in several bespoke dialogs.
             self.settings_requested.emit()
 
-    def _sign_in_to_google(self):
+    def _glean_can_sign_in(self) -> bool:
+        """Whether a browser sign-in is possible, or a token must be pasted.
+
+        Needs the address first: without it there is nowhere to sign in to.
+        """
+        from src.podcastnotes import glean
+
+        return bool(glean.instance())
+
+    def _sign_in(self, which: str):
         if self.sign_in_worker is not None and self.sign_in_worker.isRunning():
             return
         self.summary.setText("Waiting for you to sign in, in your browser...")
-        self.sign_in_worker = SignInWorker(parent=self)
+        self.sign_in_worker = SignInWorker(which, parent=self)
         self.sign_in_worker.done.connect(self._on_sign_in_done)
         self.sign_in_worker.start()
 
     def _on_sign_in_done(self, worked: bool, message: str):
         if worked:
-            # Claude and Drive both hang off this, so re-check the lot.
+            # Other rows hang off these sign-ins, so re-check the lot.
             self.start_checks()
         else:
             self.summary.setText(f"Sign-in did not finish: {message}")

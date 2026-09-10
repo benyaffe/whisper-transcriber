@@ -258,13 +258,50 @@ def test_fixing_google_starts_a_sign_in_rather_than_opening_settings(qt_app, mon
     """
     view = build(qt_app, [stub("google", failed("signed out"))])
     started, settings = [], []
-    monkeypatch.setattr(view, "_sign_in_to_google", lambda: started.append(True))
+    monkeypatch.setattr(view, "_sign_in", lambda which: started.append(which))
     view.settings_requested.connect(lambda: settings.append(True))
     try:
         view._fix("google")
 
-        assert started == [True]
+        assert started == ["google"]
         assert settings == []
+    finally:
+        view.deleteLater()
+
+
+def test_fixing_glean_signs_in_when_the_address_is_known(qt_app, monkeypatch):
+    """Glean lets applications register themselves, so there is nothing to
+    paste and nobody to ask. A browser sign-in beats a token every time."""
+    from src.podcastnotes import glean
+
+    monkeypatch.setattr(glean, "instance", lambda: "acme")
+    view = build(qt_app, [stub("glean", failed("not signed in"))])
+    started, settings = [], []
+    monkeypatch.setattr(view, "_sign_in", lambda which: started.append(which))
+    view.settings_requested.connect(lambda: settings.append(True))
+    try:
+        view._fix("glean")
+
+        assert started == ["glean"]
+        assert settings == []
+    finally:
+        view.deleteLater()
+
+
+def test_fixing_glean_asks_for_the_address_first(qt_app, monkeypatch):
+    """There is nowhere to sign in to until we know which Glean it is."""
+    from src.podcastnotes import glean
+
+    monkeypatch.setattr(glean, "instance", lambda: "")
+    view = build(qt_app, [stub("glean", failed("no address"))])
+    started, settings = [], []
+    monkeypatch.setattr(view, "_sign_in", lambda which: started.append(which))
+    view.settings_requested.connect(lambda: settings.append(True))
+    try:
+        view._fix("glean")
+
+        assert started == []
+        assert settings == [True]
     finally:
         view.deleteLater()
 

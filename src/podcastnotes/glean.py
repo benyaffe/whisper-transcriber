@@ -107,22 +107,45 @@ def save_token(token: str):
         raise RuntimeError(f"Could not save the Glean token: {e}")
 
 
+def credential() -> str:
+    """A usable bearer token for this person, however they signed in.
+
+    Browser sign-in first, because it needs nothing from anybody. A pasted
+    personal token is the fallback for an instance that does not allow
+    applications to register themselves.
+    """
+    from src.podcastnotes import glean_auth
+
+    if glean_auth.signed_in():
+        token = glean_auth.access_token(instance())
+        if token:
+            return token
+    return get_token()
+
+
+def has_credential() -> bool:
+    """Whether there is something to try, without spending a network call."""
+    from src.podcastnotes import glean_auth
+
+    return glean_auth.signed_in() or bool(get_token())
+
+
 def build_client():
     """A Glean client scoped to this person.
 
-    The token is passed as a callable so it is read at request time. That costs
-    nothing now and is the seam OAuth needs later: a refreshing credential
-    slots in without changing any call site.
+    The token is passed as a callable so it is resolved at request time. That
+    is what lets an OAuth access token, which lasts about an hour, be minted
+    fresh rather than captured once and then quietly expire mid-job.
     """
     from glean.api_client import Glean
 
     where = instance()
     if not where:
         raise NotConfigured("No Glean instance set.")
-    if not get_token():
+    if not has_credential():
         raise NotConfigured("No Glean credential.")
 
-    return Glean(api_token=get_token, instance=where, timeout_ms=CHECK_TIMEOUT_MS)
+    return Glean(api_token=credential, instance=where, timeout_ms=CHECK_TIMEOUT_MS)
 
 
 def search(query: str, page_size: int = 10) -> list[dict]:
