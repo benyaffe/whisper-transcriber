@@ -111,15 +111,11 @@ class TestTranscriberCore:
 
     def test_format_vtt_time(self):
         """VTT timestamps should format correctly."""
-        from src.core.transcriber import TranscriptionWorker
+        from src.core.runner import format_vtt_time
 
-        # Create instance to access method
-        worker = TranscriptionWorker.__new__(TranscriptionWorker)
-
-        # Test standard formatting
-        assert worker._format_vtt_time(0) == "00:00:00.000"
-        assert worker._format_vtt_time(65.5) == "00:01:05.500"
-        assert worker._format_vtt_time(3661.123) == "01:01:01.123"
+        assert format_vtt_time(0) == "00:00:00.000"
+        assert format_vtt_time(65.5) == "00:01:05.500"
+        assert format_vtt_time(3661.123) == "01:01:01.123"
 
     def test_speaker_assignment_without_diarization(self):
         """Without diarization, all segments get Speaker 1."""
@@ -297,12 +293,11 @@ class TestVTTOutput:
 
     def test_vtt_timestamps_format(self):
         """VTT timestamps should use HH:MM:SS.mmm format."""
-        from src.core.transcriber import TranscriptionWorker
         import re
 
-        # Create instance to access method
-        worker = TranscriptionWorker.__new__(TranscriptionWorker)
-        ts = worker._format_vtt_time(125.456)
+        from src.core.runner import format_vtt_time
+
+        ts = format_vtt_time(125.456)
 
         assert ts == "00:02:05.456"
         # VTT format validation

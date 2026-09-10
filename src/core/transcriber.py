@@ -1,145 +1,71 @@
 """
-Transcription engine using faster-whisper.
-Handles model loading, transcription, quality assessment, speaker diarization, and output.
+Qt wrapper around the transcription pipeline.
+
+All the work lives in src/core/runner.py, which has no Qt in it. This module
+is the adapter: it reads the saved settings, runs the pipeline on a QThread,
+and turns observer callbacks into signals.
+
+Names from runner are re-exported here because callers and tests import them
+from this module, and because monkeypatching them as attributes of this module
+is the established test idiom.
 """
 
-import os
 import time
-import platform
-import psutil
-from dataclasses import dataclass, field
 from typing import Optional
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.utils.file_utils import extract_audio, generate_output_paths, get_file_info
-from src.core.diarization import run_diarization, assign_speakers_to_segments, DiarizationError, TokenValidationError
 from src.core.config import get_hf_token, is_speaker_id_enabled
+from src.core.runner import (  # noqa: F401  (re-exported for callers and tests)
+    LANGUAGE_CODES,
+    MODEL_MEMORY_REQUIREMENTS,
+    QualityMetrics,
+    TranscriptionObserver,
+    TranscriptionOutputs,
+    TranscriptionRunner,
+    TranscriptionSegment,
+    WordTiming,
+    check_memory_available,
+    detect_diarization_device,
+    detect_optimal_settings,
+    format_vtt_time,
+)
 from src.utils.logger import get_logger, log_exception
 
 
-# Memory requirements per model (approximate, in GB)
-MODEL_MEMORY_REQUIREMENTS = {
-    "tiny": 1.0,
-    "base": 1.5,
-    "small": 2.5,
-    "medium": 5.0,
-    "large": 10.0,
-}
+class _SignalObserver(TranscriptionObserver):
+    """Forwards runner callbacks to the worker's signals.
 
-
-def check_memory_available(model_size: str, file_duration_minutes: float) -> tuple[bool, str]:
+    Qt queues signal delivery across threads, so emitting from the worker
+    thread is safe and slots run on the GUI thread.
     """
-    Check if sufficient memory is available for transcription.
-    Returns (is_ok, warning_message).
-    """
-    try:
-        mem = psutil.virtual_memory()
-        available_gb = mem.available / (1024 ** 3)
 
-        required_gb = MODEL_MEMORY_REQUIREMENTS.get(model_size, 5.0)
-        # Add buffer for audio processing (roughly 0.1GB per 10 minutes)
-        required_gb += file_duration_minutes * 0.01
+    def __init__(self, worker: "TranscriptionWorker"):
+        self._w = worker
 
-        if available_gb < required_gb:
-            return False, (
-                f"Low memory: {available_gb:.1f}GB available, ~{required_gb:.1f}GB needed. "
-                f"Try closing other apps or using a smaller model."
-            )
-        elif available_gb < required_gb * 1.5:
-            return True, f"Memory is tight ({available_gb:.1f}GB available). Large files may be slow."
-        else:
-            return True, ""
-    except Exception:
-        return True, ""  # Don't block on errors
+    def hardware(self, description):
+        self._w.hardware_info.emit(description)
 
+    def status(self, message):
+        self._w.status_message.emit(message)
 
-@dataclass
-class WordTiming:
-    """One word with its own timing, from Whisper's word_timestamps pass."""
-    start: float
-    end: float
-    word: str
-    probability: float
+    def progress(self, percent, eta_seconds):
+        self._w.progress.emit(percent, eta_seconds)
 
+    def diarization_progress(self, percent, stage):
+        self._w.diarization_progress.emit(percent, stage)
 
-@dataclass
-class TranscriptionSegment:
-    """A segment of transcribed text with timing, confidence, and speaker."""
-    start: float
-    end: float
-    text: str
-    confidence: float
-    speaker: Optional[str] = None
-    # Whisper computes these whenever word_timestamps=True. They used to be
-    # read once for an average confidence and dropped; the JSON export needs
-    # them so a later rewrite of the text can keep accurate timings.
-    words: list[WordTiming] = field(default_factory=list)
+    def segment(self, start, end, text, speaker):
+        self._w.segment_ready.emit(start, end, text, speaker)
 
+    def language_detected(self, language, confidence):
+        self._w.language_detected.emit(language, confidence)
 
-@dataclass
-class QualityMetrics:
-    """Quality metrics for transcription assessment."""
-    avg_confidence: float
-    low_confidence_ratio: float
-    repetition_score: float
+    def quality_warning(self, message):
+        self._w.quality_warning.emit(message)
 
-
-def detect_diarization_device() -> str:
-    """Which device pyannote will pick, which is not the one Whisper uses.
-
-    detect_optimal_settings() reports "cpu" on Apple Silicon because
-    faster-whisper runs int8 on CPU there, while run_diarization independently
-    moves the pipeline to MPS. Mirrors the selection in
-    src/core/diarization.py so the two cannot drift.
-    """
-    try:
-        import torch
-    except ImportError:
-        return "cpu"
-
-    if torch.backends.mps.is_available():
-        return "mps"
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-def detect_optimal_settings() -> tuple[str, str, str]:
-    """
-    Auto-detect hardware and return optimal device/compute settings.
-    Returns (device, compute_type, description)
-    """
-    try:
-        import torch
-        has_torch = True
-    except ImportError:
-        has_torch = False
-
-    # CUDA GPU
-    if has_torch and torch.cuda.is_available():
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
-        compute = "float16" if gpu_mem >= 8 else "int8"
-        return "cuda", compute, f"CUDA GPU ({gpu_mem:.0f}GB)"
-
-    # Apple Silicon
-    if platform.system() == "Darwin" and platform.processor() == "arm":
-        return "cpu", "int8", "Apple Silicon (optimized)"
-
-    # Fallback
-    return "cpu", "int8", "CPU"
-
-
-# Language code mapping
-LANGUAGE_CODES = {
-    "english": "en", "spanish": "es", "french": "fr", "german": "de",
-    "italian": "it", "portuguese": "pt", "dutch": "nl", "russian": "ru",
-    "chinese": "zh", "japanese": "ja", "korean": "ko", "arabic": "ar",
-    "hindi": "hi", "turkish": "tr", "polish": "pl", "ukrainian": "uk",
-    "vietnamese": "vi", "thai": "th", "indonesian": "id", "malay": "ms",
-    "swedish": "sv", "norwegian": "no", "danish": "da", "finnish": "fi",
-    "greek": "el", "czech": "cs", "romanian": "ro", "hungarian": "hu",
-    "hebrew": "he",
-}
+    def audio_ready(self, path):
+        self._w.audio_ready.emit(path)
 
 
 class TranscriptionWorker(QThread):
@@ -157,487 +83,68 @@ class TranscriptionWorker(QThread):
     completed = pyqtSignal(str, str, str, str)  # vtt_path, txt_path, json_path, audio_path
     error = pyqtSignal(str)  # error message
 
-    # Quality thresholds
-    CONFIDENCE_THRESHOLD = 0.6
-    LOW_CONFIDENCE_RATIO_THRESHOLD = 0.25
-    ASSESSMENT_DURATION = 120  # seconds
-
-    # Watchdog: timeout if no progress for this many seconds
-    SEGMENT_TIMEOUT = 300  # 5 minutes
-
-    # When speaker ID is going to run, transcription owns the bar up to a
-    # ceiling and diarization owns the rest. The old code emitted a single
-    # progress.emit(95, -1), giving a phase that runs for minutes five integer
-    # steps of a 0-100 QProgressBar, which reads as frozen.
-    #
-    # The ceiling cannot be a constant. Both phases scale linearly with audio
-    # duration, so their ratio is a property of the model and the hardware, not
-    # of the file: measured on Apple Silicon, transcription runs at ~0.34x
-    # realtime and diarization at ~0.04x, but without MPS diarization falls back
-    # to CPU and takes a far larger share. So predict both and divide.
-    #
-    # These factors only apportion the progress bar and never affect output,
-    # so being roughly right is sufficient.
-    DIARIZATION_REALTIME_FACTOR = {"mps": 0.045, "cuda": 0.045, "cpu": 0.15}
-    MIN_TRANSCRIBE_CEILING = 55.0
-    MAX_TRANSCRIBE_CEILING = 92.0
-    DEFAULT_TRANSCRIBE_CEILING = 80.0  # until the first throughput measurement lands
-
-    # Transcribe this much audio before trusting a throughput measurement.
-    CEILING_ESTIMATE_AFTER_AUDIO_S = 20.0
-
     def __init__(self, filepath: str, initial_model: str = "medium", language: Optional[str] = None):
         super().__init__()
         self.filepath = filepath
-        self.model_size = initial_model
-        self.language = LANGUAGE_CODES.get(language, language) if language else None
-        self._cancelled = False
-        self.segments: list[TranscriptionSegment] = []
-        self._last_segment_time = time.time()
         self._logger = get_logger()
-        self.audio_path: Optional[str] = None
-        self._temp_dir: Optional[str] = None
-        self._will_diarize = False
-        self._progress_ceiling = self.DEFAULT_TRANSCRIBE_CEILING
-        # Populated by _run_diarization, consumed by the JSON export.
-        self._diarization = None
-        self._speaker_map: dict[str, str] = {}
+        # Settings are read here, in the Qt layer, and handed to the runner as
+        # plain values. The runner never consults QSettings, which is what lets
+        # a caller pin speaker ID on regardless of the Transcribe-mode checkbox.
+        self.runner = TranscriptionRunner(
+            filepath,
+            model=initial_model,
+            language=language,
+            hf_token=get_hf_token(),
+            enable_speaker_id=is_speaker_id_enabled(),
+            observer=_SignalObserver(self),
+        )
+
+    # Read-through properties, so existing callers keep working.
+    @property
+    def segments(self):
+        return self.runner.segments
+
+    @property
+    def audio_path(self):
+        return self.runner.audio_path
+
+    @property
+    def model_size(self):
+        return self.runner.model_size
+
+    @property
+    def language(self):
+        return self.runner.language
 
     def run(self):
         try:
-            self._logger.info(f"Starting transcription: {self.filepath}")
-            self._transcribe()
-            self._logger.info("Transcription completed successfully")
+            outputs = self.runner.run()
         except Exception as e:
-            if not self._cancelled:
+            if not self.runner.cancelled:
                 import traceback
+
                 log_exception(e, "transcription")
                 self.status_message.emit(f"[Error: {type(e).__name__}: {e}]")
                 for line in traceback.format_exc().rstrip().splitlines():
                     self.status_message.emit(f"[  {line}]")
                 self.error.emit(f"{type(e).__name__}: {e}")
-        finally:
-            # Success, failure and cancellation all have to release the
-            # snapshot; the cancel path in particular used to leak on every use.
-            self._cleanup_temp_audio()
+            return
 
-    def _transcribe(self):
-        """Main transcription workflow."""
-        from faster_whisper import WhisperModel
-
-        # Track if speaker ID was successfully used (for VTT output)
-        self._speaker_id_used = False
-
-        # Decide up front whether speaker ID will run, so the progress bar can
-        # reserve room for it rather than discovering it at 95%. How much room
-        # is refined once from measured throughput, below.
-        self._will_diarize, _, _ = self._diarization_preflight()
-        self._progress_ceiling = (
-            self.DEFAULT_TRANSCRIBE_CEILING if self._will_diarize else 100.0
+        if outputs is None:
+            return  # cancelled
+        self.completed.emit(
+            outputs.vtt_path, outputs.txt_path, outputs.json_path, outputs.audio_path
         )
-        ceiling_measured = not self._will_diarize
-        diarization_device = detect_diarization_device() if self._will_diarize else "cpu"
-
-        # Step 1: Hardware detection
-        device, compute_type, hw_desc = detect_optimal_settings()
-        self.hardware_info.emit(f"Using {hw_desc}")
-        self.status_message.emit(f"[Hardware: {hw_desc}]")
-        self._logger.info(f"Hardware: {hw_desc}, device={device}, compute={compute_type}")
-
-        # Step 2: Prepare audio
-        self.status_message.emit("[Preparing audio...]")
-        self.audio_path = self._prepare_audio()
-        self.audio_ready.emit(self.audio_path)
-
-        # Step 2.5: Memory check
-        info = get_file_info(self.audio_path)
-        duration_minutes = info.get('duration', 0) / 60
-        mem_ok, mem_warning = check_memory_available(self.model_size, duration_minutes)
-        if not mem_ok:
-            self.quality_warning.emit(mem_warning)
-            self._logger.warning(f"Memory warning: {mem_warning}")
-        elif mem_warning:
-            self.status_message.emit(f"[{mem_warning}]")
-
-        # Step 3: Load model (check cancellation before slow operation)
-        if self._cancelled:
-            return
-        self.status_message.emit(f"[Loading {self.model_size} model ({compute_type})...]")
-        self._logger.info(f"Loading model: {self.model_size}")
-        model = WhisperModel(self.model_size, device=device, compute_type=compute_type)
-        if self._cancelled:
-            return
-
-        # Step 4: Get duration
-        info = get_file_info(self.audio_path)
-        total_duration = info.get('duration', 0)
-
-        # Step 5: Transcribe
-        lang_info = f"language: {self.language}" if self.language else "auto-detecting language"
-        self.status_message.emit(f"[Starting transcription ({lang_info})...]")
-
-        segments_gen, trans_info = model.transcribe(
-            self.audio_path,
-            beam_size=5,
-            word_timestamps=True,
-            vad_filter=True,
-            language=self.language
-        )
-
-        self.language_detected.emit(trans_info.language, trans_info.language_probability)
-
-        # Process segments
-        start_time = time.time()
-        assessed = False
-
-        # Start the stall clock here, not in __init__. Everything above this
-        # point -- model load, a first-run model download, audio extraction --
-        # can easily take longer than SEGMENT_TIMEOUT, and the clock used to be
-        # running throughout, so a slow start killed the run with "appears
-        # stuck" before a single segment had been attempted.
-        self._last_segment_time = time.time()
-
-        for segment in segments_gen:
-            if self._cancelled:
-                return
-
-            # Stall check. Note what this can and cannot do: it only runs when
-            # the generator yields, so it reports a gap between two segments
-            # after the fact. It cannot fire while faster-whisper is genuinely
-            # wedged inside a blocking call, because then we never get here.
-            # Catching that needs a timer on another thread.
-            now = time.time()
-            gap = now - self._last_segment_time
-            if gap > self.SEGMENT_TIMEOUT:
-                self._logger.error(f"Watchdog: {gap:.0f}s gap between segments")
-                raise RuntimeError(
-                    f"Transcription stalled (no progress for {gap / 60:.0f} minutes). "
-                    "The file may be corrupted or incompatible."
-                )
-            self._last_segment_time = now
-
-            # Calculate confidence
-            words = [
-                WordTiming(
-                    start=w.start,
-                    end=w.end,
-                    word=w.word,
-                    probability=w.probability,
-                )
-                for w in (segment.words or [])
-            ]
-            avg_conf = (
-                sum(w.probability for w in words) / len(words) if words else 0.8
-            )
-
-            trans_seg = TranscriptionSegment(
-                start=segment.start,
-                end=segment.end,
-                text=segment.text.strip(),
-                confidence=avg_conf,
-                speaker=None,
-                words=words,
-            )
-            self.segments.append(trans_seg)
-            self.segment_ready.emit(segment.start, segment.end, segment.text.strip(), "")
-
-            # Once enough audio has gone through to trust the throughput
-            # figure, size the speaker-ID share of the bar and freeze it. Doing
-            # this once rather than continuously is what keeps the bar
-            # monotonic; it lands within the first few percent, so the step is
-            # under a percentage point.
-            if not ceiling_measured and segment.end >= self.CEILING_ESTIMATE_AFTER_AUDIO_S:
-                ceiling_measured = True
-                self._progress_ceiling = self._estimate_progress_ceiling(
-                    audio_duration=total_duration,
-                    elapsed=time.time() - start_time,
-                    audio_done=segment.end,
-                    device=diarization_device,
-                )
-                self._logger.info(
-                    f"Progress split: transcription 0-{self._progress_ceiling:.0f}%, "
-                    f"speaker ID {self._progress_ceiling:.0f}-100% "
-                    f"(diarization device={diarization_device})"
-                )
-
-            # Progress
-            if total_duration > 0:
-                percent = (segment.end / total_duration) * self._progress_ceiling
-                elapsed = time.time() - start_time
-                if segment.end > 0:
-                    rate = elapsed / segment.end
-                    remaining = (total_duration - segment.end) * rate
-                    self.progress.emit(percent, int(remaining))
-                else:
-                    self.progress.emit(percent, 0)
-
-            # Quality assessment at 2 minutes. Warns; does not act. There used
-            # to be an automatic medium-to-large upgrade here, but it never
-            # worked: it rebound segments_gen inside `for segment in
-            # segments_gen`, and Python bound that iterator once at loop entry.
-            # The rebind did nothing, so the run threw away its first two
-            # minutes, loaded and paid for the large model, never used it, and
-            # told the user it had upgraded. Removed rather than repaired:
-            # large needs ~10GB and the model is now fixed for a whole run.
-            if not assessed and segment.end >= self.ASSESSMENT_DURATION:
-                assessed = True
-                quality = self._assess_quality()
-
-                if (quality.avg_confidence < self.CONFIDENCE_THRESHOLD or
-                        quality.low_confidence_ratio > self.LOW_CONFIDENCE_RATIO_THRESHOLD):
-                    self.quality_warning.emit(
-                        f"Quality issues detected ({quality.avg_confidence:.0%} confidence). "
-                        f"Try the large model for this file."
-                    )
-
-        # Step 6: Speaker diarization
-        if self._cancelled:
-            return
-        if self._will_diarize:
-            self.diarization_progress.emit(
-                self._progress_ceiling, "Loading speaker model"
-            )
-        self._run_diarization()
-
-        # Step 7: Save outputs
-        if self._cancelled:
-            return
-        vtt_path, txt_path, json_path = self._save_outputs()
-        self.completed.emit(vtt_path, txt_path, json_path, self.audio_path)
-
-    def _prepare_audio(self) -> str:
-        """Extract audio from video if needed; otherwise snapshot the
-        source to a stable temp path so the pipeline survives the source
-        being moved or deleted mid-run (folder watchers, archival scripts)."""
-        info = get_file_info(self.filepath)
-        if info.get('has_video') and info.get('has_audio'):
-            return extract_audio(self.filepath)
-        return self._snapshot_audio(self.filepath)
-
-    def _snapshot_audio(self, src: str) -> str:
-        import tempfile
-        import shutil
-        tmp_dir = tempfile.mkdtemp(prefix='wt_source_')
-        dst = os.path.join(tmp_dir, os.path.basename(src))
-        try:
-            os.link(src, dst)
-        except OSError:
-            shutil.copyfile(src, dst)
-        # Remembered so _cleanup_temp_audio can remove it. A hardlink costs
-        # nothing, but a cross-volume source (external drive, network share)
-        # falls through to a full copy that used to be left behind forever.
-        self._temp_dir = tmp_dir
-        return dst
-
-    def _cleanup_temp_audio(self):
-        """Remove the snapshot directory, if we made one. Never raises."""
-        if not self._temp_dir:
-            return
-        import shutil
-        try:
-            shutil.rmtree(self._temp_dir, ignore_errors=True)
-            self._logger.info(f"Removed temp audio snapshot: {self._temp_dir}")
-        finally:
-            self._temp_dir = None
-
-    @classmethod
-    def _estimate_progress_ceiling(
-        cls, audio_duration: float, elapsed: float, audio_done: float, device: str
-    ) -> float:
-        """Where transcription should stop so speaker ID gets a fair share of the bar.
-
-        Extrapolates total transcription time from throughput so far, predicts
-        diarization time from the device's realtime factor, and splits the bar
-        in proportion. Returns a percentage, clamped so neither phase can be
-        squeezed into nothing by a wild measurement.
-        """
-        if audio_duration <= 0 or audio_done <= 0 or elapsed <= 0:
-            return cls.DEFAULT_TRANSCRIBE_CEILING
-
-        predicted_transcribe = (elapsed / audio_done) * audio_duration
-        factor = cls.DIARIZATION_REALTIME_FACTOR.get(
-            device, cls.DIARIZATION_REALTIME_FACTOR["cpu"]
-        )
-        predicted_diarize = factor * audio_duration
-
-        total = predicted_transcribe + predicted_diarize
-        if total <= 0:
-            return cls.DEFAULT_TRANSCRIBE_CEILING
-
-        ceiling = 100.0 * predicted_transcribe / total
-        return min(max(ceiling, cls.MIN_TRANSCRIBE_CEILING), cls.MAX_TRANSCRIBE_CEILING)
-
-    def _diarization_preflight(self) -> tuple[bool, str, str]:
-        """Decide whether diarization will run, before transcription starts.
-
-        Returns (will_run, hf_token, reason). Called up front so the progress
-        bar knows whether to reserve room for the speaker-ID phase, and again
-        by _run_diarization so the decision is made in exactly one place.
-        """
-        if not is_speaker_id_enabled():
-            return False, "", "[Speaker ID: Disabled]"
-
-        hf_token = get_hf_token()
-        if not hf_token:
-            return False, "", "[Speaker ID: No token configured - see Settings]"
-
-        return True, hf_token, ""
-
-    def _run_diarization(self):
-        """Run speaker diarization and assign speakers to segments."""
-        will_run, hf_token, reason = self._diarization_preflight()
-        if not will_run:
-            self.status_message.emit(reason)
-            # Don't assign speakers - leave them as None for VTT output
-            self._speaker_id_used = False
-            return
-
-        # Status callback
-        def status_cb(msg: str):
-            self.status_message.emit(msg)
-
-        # Map the hook's 0.0-1.0 onto the slice of the bar we reserved.
-        floor = self._progress_ceiling
-        span = 100.0 - floor
-
-        def progress_cb(fraction: float, stage_label: str):
-            percent = floor + fraction * span
-            self.diarization_progress.emit(percent, stage_label)
-
-        try:
-            self.status_message.emit("[Speaker ID: Starting...]")
-            result = run_diarization(
-                self.audio_path,
-                hf_token,
-                status_callback=status_cb,
-                progress_callback=progress_cb
-            )
-
-            if not result.turns:
-                self.status_message.emit("[Speaker ID: No speakers detected]")
-                self._speaker_id_used = False
-                return
-
-            self._diarization = result
-            # Align against the non-overlapping view where pyannote gave us
-            # one. With the overlapping annotation, a segment spoken over by
-            # two people is attributed to whichever turn happens to be first in
-            # the list. For a group recording where people talk across each
-            # other, that is most of the interesting material.
-            alignment_turns = result.exclusive_turns or result.turns
-            speaker_map = assign_speakers_to_segments(self.segments, alignment_turns)
-            self._speaker_map = speaker_map
-            self._speaker_id_used = True
-            # Debug: verify speakers were assigned
-            assigned = sum(1 for s in self.segments if s.speaker)
-            self.status_message.emit(f"[Speaker ID complete: {len(speaker_map)} speaker(s), {assigned}/{len(self.segments)} segments tagged]")
-
-        except TokenValidationError as e:
-            for line in str(e).splitlines() or [""]:
-                self.status_message.emit(f"[Speaker ID: Token error - {line}]")
-            self._speaker_id_used = False
-
-        except DiarizationError as e:
-            for line in str(e).splitlines() or [""]:
-                self.status_message.emit(f"[Speaker ID failed: {line}]")
-            self._speaker_id_used = False
-
-        except Exception as e:
-            import traceback
-            self.status_message.emit(f"[Speaker ID error: {type(e).__name__}: {e}]")
-            for line in traceback.format_exc().rstrip().splitlines():
-                self.status_message.emit(f"[  {line}]")
-            self._speaker_id_used = False
-
-    def _assess_quality(self) -> QualityMetrics:
-        """Assess transcription quality from collected segments."""
-        if not self.segments:
-            return QualityMetrics(0.8, 0.0, 0.0)
-
-        confidences = [s.confidence for s in self.segments]
-        avg_conf = sum(confidences) / len(confidences)
-        low_count = sum(1 for c in confidences if c < self.CONFIDENCE_THRESHOLD)
-        low_ratio = low_count / len(confidences)
-
-        # Repetition check
-        texts = [s.text.lower() for s in self.segments]
-        reps = sum(1 for i in range(1, len(texts)) if texts[i] == texts[i-1] and len(texts[i]) > 10)
-        rep_score = reps / len(texts) if texts else 0
-
-        return QualityMetrics(avg_conf, low_ratio, rep_score)
-
-    def _save_outputs(self) -> tuple[str, str, str]:
-        """Save transcription to VTT, TXT and JSON with speaker labels."""
-        vtt_path, txt_path, json_path = generate_output_paths(self.filepath)
-
-        # Debug: log speaker ID state
-        self._logger.info(f"Saving outputs: _speaker_id_used={self._speaker_id_used}, segments={len(self.segments)}")
-        if self.segments:
-            sample = self.segments[0]
-            self._logger.info(f"First segment speaker: '{sample.speaker}', type: {type(sample.speaker)}")
-
-        # VTT - only include speaker tags if speaker ID was successfully used
-        with open(vtt_path, 'w', encoding='utf-8') as f:
-            f.write("WEBVTT\n\n")
-            for i, seg in enumerate(self.segments, 1):
-                start = self._format_vtt_time(seg.start)
-                end = self._format_vtt_time(seg.end)
-                f.write(f"{i}\n{start} --> {end}\n")
-                if self._speaker_id_used and seg.speaker:
-                    f.write(f"<v {seg.speaker}>{seg.text}</v>\n\n")
-                else:
-                    f.write(f"{seg.text}\n\n")
-
-        # TXT - only include speaker labels if speaker ID was successfully used
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            current_speaker = None
-            for seg in self.segments:
-                if self._speaker_id_used and seg.speaker and seg.speaker != current_speaker:
-                    current_speaker = seg.speaker
-                    f.write(f"\n{current_speaker}:\n")
-                f.write(f"{seg.text} ")
-
-        # JSON - the machine-readable one. Written on every run, including when
-        # speaker ID is off, so a consumer can rely on it existing.
-        self._save_json(json_path)
-
-        return vtt_path, txt_path, json_path
-
-    def _save_json(self, json_path: str):
-        """Write the segment JSON. Never fails the run.
-
-        A transcription that produced a good VTT and TXT should not be reported
-        as failed because the extra machine-readable file could not be written.
-        """
-        from src.core.json_export import build_payload, write_json
-
-        try:
-            info = get_file_info(self.audio_path or self.filepath)
-            payload = build_payload(
-                source_path=self.filepath,
-                segments=self.segments,
-                duration=info.get('duration', 0.0),
-                model=self.model_size,
-                language=self.language,
-                device=detect_diarization_device() if self._speaker_id_used else "cpu",
-                speaker_id_used=self._speaker_id_used,
-                speaker_map=self._speaker_map,
-                diarization=self._diarization,
-            )
-            write_json(json_path, payload)
-            self._logger.info(f"Wrote segment JSON: {json_path}")
-        except Exception as e:
-            log_exception(e, "json export")
-            self.status_message.emit(f"[JSON export failed: {type(e).__name__}: {e}]")
-
-    def _format_vtt_time(self, seconds: float) -> str:
-        """Format seconds as VTT timestamp."""
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        s = int(seconds % 60)
-        ms = int((seconds % 1) * 1000)
-        return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
     def cancel(self):
         """Cancel transcription."""
-        self._cancelled = True
+        self.runner.cancel()
+
+    def seconds_since_last_segment(self) -> float:
+        """How long the pipeline has been quiet.
+
+        The runner's own stall check only fires when the segment generator
+        yields, so it cannot notice faster-whisper wedged inside a blocking
+        call. A caller with an event loop can poll this to spot that case.
+        """
+        return time.time() - self.runner.last_segment_time

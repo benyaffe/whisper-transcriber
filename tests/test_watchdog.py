@@ -16,29 +16,7 @@ import time
 
 import pytest
 
-from src.core.transcriber import TranscriptionSegment, TranscriptionWorker
-
-
-class _Signal:
-    def __init__(self):
-        self.emissions = []
-
-    def emit(self, *args):
-        self.emissions.append(args)
-
-    def connect(self, slot):
-        pass
-
-
-class _NullLogger:
-    def info(self, *a, **k):
-        pass
-
-    def error(self, *a, **k):
-        pass
-
-    def warning(self, *a, **k):
-        pass
+from src.core.runner import TranscriptionRunner
 
 
 def fake_segment(start, end):
@@ -49,32 +27,19 @@ def fake_segment(start, end):
 
 
 def build_worker(monkeypatch, segments, *, model_load_seconds=0.0):
-    """A worker wired to a scripted generator, with a controllable clock."""
-    from src.core import transcriber as tmod
+    """A runner wired to a scripted generator, with a controllable clock.
+
+    This used to hand-populate fourteen attributes on a
+    TranscriptionWorker.__new__ instance and stub ten pyqtSignals, purely
+    because QThread.__init__ could not be called in a test. The runner has a
+    normal constructor and a no-op observer, so all of that is gone.
+    """
+    from src.core import runner as tmod
 
     clock = {"now": 1000.0}
     monkeypatch.setattr(tmod.time, "time", lambda: clock["now"])
 
-    worker = TranscriptionWorker.__new__(TranscriptionWorker)
-    worker.filepath = "/tmp/x.m4a"
-    worker.model_size = "medium"
-    worker.language = "en"
-    worker._cancelled = False
-    worker.segments = []
-    worker._logger = _NullLogger()
-    worker.audio_path = "/tmp/x.m4a"
-    worker._temp_dir = None
-    worker._will_diarize = False
-    worker._progress_ceiling = 100.0
-    worker._diarization = None
-    worker._speaker_map = {}
-    worker._speaker_id_used = False
-    worker._last_segment_time = clock["now"]  # as __init__ would leave it
-
-    for name in ("progress", "diarization_progress", "status_message", "segment_ready",
-                 "language_detected", "quality_warning", "hardware_info", "audio_ready",
-                 "completed", "error"):
-        setattr(worker, name, _Signal())
+    worker = TranscriptionRunner("/tmp/x.m4a", model="medium", language="english")
 
     # Everything before the segment loop, collapsed into one slow step.
     monkeypatch.setattr(tmod, "detect_optimal_settings", lambda: ("cpu", "int8", "Test"))
@@ -104,7 +69,7 @@ def test_slow_model_load_does_not_trip_the_stall_check(monkeypatch):
     segments = [fake_segment(0.0, 5.0), fake_segment(5.0, 10.0)]
     worker, clock = build_worker(
         monkeypatch, segments,
-        model_load_seconds=TranscriptionWorker.SEGMENT_TIMEOUT * 3,
+        model_load_seconds=TranscriptionRunner.SEGMENT_TIMEOUT * 3,
     )
 
     worker._transcribe()  # must not raise
@@ -114,7 +79,7 @@ def test_slow_model_load_does_not_trip_the_stall_check(monkeypatch):
 
 def test_a_real_gap_between_segments_still_trips_it(monkeypatch):
     """The check has to keep doing the one thing it can actually do."""
-    slow = TranscriptionWorker.SEGMENT_TIMEOUT + 60
+    slow = TranscriptionRunner.SEGMENT_TIMEOUT + 60
 
     class StallingIterator:
         """Yields one segment, then burns more than the timeout before the next."""
@@ -163,14 +128,14 @@ def test_normal_pacing_never_trips(monkeypatch):
 
 
 def test_the_clock_is_reset_at_the_segment_loop_not_in_init(monkeypatch):
-    """Pin the actual fix, so it cannot quietly move back into __init__."""
+    """Pin the actual fix, so it cannot quietly move back into the constructor."""
     import ast
     import inspect
     import textwrap
 
-    from src.core import transcriber
+    from src.core import runner
 
-    source = textwrap.dedent(inspect.getsource(transcriber.TranscriptionWorker._transcribe))
+    source = textwrap.dedent(inspect.getsource(runner.TranscriptionRunner._transcribe))
     tree = ast.parse(source)
 
     assigns = [
@@ -181,3 +146,51 @@ def test_the_clock_is_reset_at_the_segment_loop_not_in_init(monkeypatch):
         if isinstance(t, ast.Attribute) and t.attr == "_last_segment_time"
     ]
     assert assigns, "_transcribe no longer resets the stall clock before the loop"
+
+
+# --- headless operation -------------------------------------------------------
+
+
+def test_runner_works_with_no_qapplication(monkeypatch):
+    """The path PodcastNotesWT depends on: a real run, no Qt object anywhere.
+
+    The observer here is a plain class, not a QObject, and nothing constructs a
+    QApplication. Before the split this was impossible: the pipeline lived on a
+    QThread.
+    """
+    from src.core.runner import TranscriptionObserver, TranscriptionRunner
+
+    seen = {"segments": [], "progress": [], "status": []}
+
+    class Recorder(TranscriptionObserver):
+        def segment(self, start, end, text, speaker):
+            seen["segments"].append((start, end, text))
+
+        def progress(self, percent, eta_seconds):
+            seen["progress"].append(percent)
+
+        def status(self, message):
+            seen["status"].append(message)
+
+    segments = [fake_segment(i * 5.0, (i + 1) * 5.0) for i in range(4)]
+    worker, _ = build_worker(monkeypatch, segments)
+    worker.observer = Recorder()
+
+    worker._transcribe()
+
+    assert len(seen["segments"]) == 4
+    assert seen["progress"] == sorted(seen["progress"])
+    assert any("Hardware" in m for m in seen["status"])
+
+
+def test_speaker_id_is_driven_by_arguments_not_saved_settings(monkeypatch):
+    """Two runners, same machine, opposite speaker-ID decisions."""
+    from src.core.runner import TranscriptionRunner
+
+    on = TranscriptionRunner("/tmp/x.wav", hf_token="hf_x", enable_speaker_id=True)
+    off = TranscriptionRunner("/tmp/x.wav", hf_token="hf_x", enable_speaker_id=False)
+    no_token = TranscriptionRunner("/tmp/x.wav", hf_token="", enable_speaker_id=True)
+
+    assert (on.enable_speaker_id, bool(on.hf_token)) == (True, True)
+    assert off.enable_speaker_id is False
+    assert bool(no_token.hf_token) is False

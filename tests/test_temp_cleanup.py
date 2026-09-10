@@ -14,20 +14,17 @@ import os
 
 import pytest
 
-from src.core.transcriber import TranscriptionWorker
+from src.core.runner import TranscriptionRunner
 
 
 def make_worker(tmp_path):
-    """A worker with the state _snapshot_audio and cleanup touch, no QThread."""
-    worker = TranscriptionWorker.__new__(TranscriptionWorker)
-    worker._temp_dir = None
-    worker._logger = _NullLogger()
-    return worker
+    """A runner built through its real constructor.
 
-
-class _NullLogger:
-    def info(self, *a, **k):
-        pass
+    This used to be TranscriptionWorker.__new__(TranscriptionWorker) with the
+    attributes hand-populated, purely to dodge QThread.__init__. The runner has
+    no Qt in it, so the constructor just works.
+    """
+    return TranscriptionRunner(str(tmp_path / "audio.m4a"))
 
 
 def test_snapshot_records_the_directory_it_created(tmp_path):
@@ -95,13 +92,16 @@ def test_cleanup_survives_a_vanished_directory(tmp_path):
 
 
 def test_run_cleans_up_even_when_transcription_raises(tmp_path, monkeypatch):
-    """The finally in run() is the thing under test."""
+    """The finally in run() is the thing under test.
+
+    The runner deliberately re-raises rather than swallowing into an error
+    callback, so the exception has to escape *and* the snapshot has to go.
+    """
     source = tmp_path / "audio.m4a"
     source.write_bytes(b"x" * 2048)
 
     worker = make_worker(tmp_path)
     worker.filepath = str(source)
-    worker._cancelled = True  # suppresses the error signalling path
     snapshot_dir = {}
 
     def fake_transcribe():
@@ -111,9 +111,31 @@ def test_run_cleans_up_even_when_transcription_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(worker, "_transcribe", fake_transcribe)
 
-    worker.run()
+    with pytest.raises(RuntimeError, match="boom"):
+        worker.run()
 
     assert not os.path.exists(snapshot_dir["path"]), "leaked on the failure path"
+
+
+def test_run_cleans_up_on_cancellation(tmp_path, monkeypatch):
+    """Cancellation used to leak on every single use."""
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"x" * 2048)
+
+    worker = make_worker(tmp_path)
+    worker.filepath = str(source)
+    snapshot_dir = {}
+
+    def fake_transcribe():
+        worker._snapshot_audio(str(source))
+        snapshot_dir["path"] = worker._temp_dir
+        worker.cancel()
+        return None  # what the real _transcribe returns when cancelled
+
+    monkeypatch.setattr(worker, "_transcribe", fake_transcribe)
+
+    assert worker.run() is None
+    assert not os.path.exists(snapshot_dir["path"]), "leaked on the cancel path"
 
 
 def test_run_cleans_up_on_success(tmp_path, monkeypatch):
@@ -122,7 +144,6 @@ def test_run_cleans_up_on_success(tmp_path, monkeypatch):
 
     worker = make_worker(tmp_path)
     worker.filepath = str(source)
-    worker._cancelled = False
     snapshot_dir = {}
 
     def fake_transcribe():
@@ -154,9 +175,9 @@ def test_model_size_is_never_mutated_mid_run():
     import inspect
     import textwrap
 
-    from src.core import transcriber
+    from src.core import runner
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(transcriber.TranscriptionWorker)))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(runner.TranscriptionRunner)))
 
     # Real assignment statements only. A substring match would also catch
     # `check_memory_available(self.model_size, ...)`, which is a read.
@@ -188,9 +209,9 @@ def test_low_confidence_warns_rather_than_switching_models():
     """The quality check still fires; it just no longer tries to act on it."""
     import inspect
 
-    from src.core import transcriber
+    from src.core import runner
 
-    source = inspect.getsource(transcriber.TranscriptionWorker._transcribe)
+    source = inspect.getsource(runner.TranscriptionRunner._transcribe)
 
-    assert "quality_warning.emit" in source
+    assert "quality_warning(" in source
     assert "WhisperModel(\"large\"" not in source, "the dead upgrade path is back"

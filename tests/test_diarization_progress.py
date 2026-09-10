@@ -294,26 +294,82 @@ def test_run_diarization_without_callback_passes_no_hook(patched_diarization):
 
 
 @pytest.mark.parametrize(
-    "enabled, token, expected_run, expected_reason_fragment",
+    "enabled, token, expected_reason_fragment",
     [
-        (False, "hf_abc", False, "Disabled"),
-        (True, "", False, "No token configured"),
-        (True, "hf_abc", True, ""),
+        (False, "hf_abc", "Disabled"),
+        (True, "", "No token configured"),
     ],
 )
-def test_diarization_preflight(monkeypatch, enabled, token, expected_run, expected_reason_fragment):
-    """The will-it-run decision is made once, up front, and drives the bar range."""
-    from src.core import transcriber
+def test_diarization_declines_and_says_why(enabled, token, expected_reason_fragment):
+    """Both ways of not running speaker ID have to reach the user.
 
-    monkeypatch.setattr(transcriber, "is_speaker_id_enabled", lambda: enabled)
-    monkeypatch.setattr(transcriber, "get_hf_token", lambda: token)
+    This used to monkeypatch is_speaker_id_enabled and get_hf_token as module
+    globals on transcriber. The runner takes them as constructor arguments, so
+    the test just passes them.
+    """
+    from src.core.runner import TranscriptionObserver, TranscriptionRunner
 
-    worker = transcriber.TranscriptionWorker.__new__(transcriber.TranscriptionWorker)
-    will_run, hf_token, reason = worker._diarization_preflight()
+    said = []
 
-    assert will_run is expected_run
-    assert expected_reason_fragment in reason
-    assert hf_token == (token if expected_run else "")
+    class Recorder(TranscriptionObserver):
+        def status(self, message):
+            said.append(message)
+
+    runner = TranscriptionRunner(
+        "/tmp/x.wav", hf_token=token, enable_speaker_id=enabled, observer=Recorder()
+    )
+    runner._run_diarization()
+
+    assert runner._speaker_id_used is False
+    assert any(expected_reason_fragment in m for m in said), said
+
+
+def test_runner_ignores_global_settings_entirely():
+    """PodcastNotesWT needs speaker ID on whatever the app checkbox says.
+
+    A runner that consulted saved settings could not give it that, so this
+    pins that the constructor arguments are the only inputs. Checks called
+    names rather than source text, which would also match the docstring
+    explaining why.
+    """
+    import ast
+    import inspect
+
+    from src.core import runner
+
+    tree = ast.parse(inspect.getsource(runner))
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "is_speaker_id_enabled" not in called
+    assert "get_hf_token" not in called
+    assert "QSettings" not in called
+
+
+def test_runner_imports_no_qt_at_all():
+    """The headless path PodcastNotesWT depends on.
+
+    Module-level and function-local imports both, since this codebase uses
+    function-local imports heavily and one would hide here easily.
+    """
+    import ast
+    import inspect
+
+    from src.core import runner
+
+    tree = ast.parse(inspect.getsource(runner))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    qt = sorted(m for m in imported if m.split(".")[0] in {"PyQt6", "PyQt5", "PySide6"})
+    assert qt == [], f"runner imports Qt: {qt}"
 
 
 def test_hook_fraction_maps_onto_the_reserved_slice_of_the_bar():
@@ -340,9 +396,9 @@ REAL_RUNS = [
 @pytest.mark.parametrize("name, audio_s, transcribe_s, diarize_s", REAL_RUNS)
 def test_predicted_split_matches_measured_runs(name, audio_s, transcribe_s, diarize_s):
     """The model has to reproduce the runs it was derived from, within a point."""
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
-    ceiling = TranscriptionWorker._estimate_progress_ceiling(
+    ceiling = TranscriptionRunner._estimate_progress_ceiling(
         audio_duration=audio_s,
         elapsed=transcribe_s,
         audio_done=audio_s,  # measured over the whole run
@@ -359,15 +415,15 @@ def test_predicted_split_matches_measured_runs(name, audio_s, transcribe_s, diar
 
 def test_early_measurement_predicts_the_same_split_as_the_full_run():
     """The estimate is taken ~20s in; extrapolating early must not skew it."""
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
     audio_s, transcribe_s = 756.0, 274.0
     rate = transcribe_s / audio_s
 
-    early = TranscriptionWorker._estimate_progress_ceiling(
+    early = TranscriptionRunner._estimate_progress_ceiling(
         audio_duration=audio_s, elapsed=20.0 * rate, audio_done=20.0, device="mps"
     )
-    full = TranscriptionWorker._estimate_progress_ceiling(
+    full = TranscriptionRunner._estimate_progress_ceiling(
         audio_duration=audio_s, elapsed=transcribe_s, audio_done=audio_s, device="mps"
     )
     assert early == pytest.approx(full, abs=0.5)
@@ -375,23 +431,23 @@ def test_early_measurement_predicts_the_same_split_as_the_full_run():
 
 def test_cpu_only_hardware_gets_a_bigger_speaker_id_share():
     """The whole point of making this adaptive rather than a constant."""
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
     kwargs = dict(audio_duration=756.0, elapsed=274.0, audio_done=756.0)
-    mps = TranscriptionWorker._estimate_progress_ceiling(device="mps", **kwargs)
-    cpu = TranscriptionWorker._estimate_progress_ceiling(device="cpu", **kwargs)
+    mps = TranscriptionRunner._estimate_progress_ceiling(device="mps", **kwargs)
+    cpu = TranscriptionRunner._estimate_progress_ceiling(device="cpu", **kwargs)
 
     assert cpu < mps, "a slower diarization device must be given more of the bar"
 
 
 def test_unknown_device_falls_back_to_the_pessimistic_factor():
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
     kwargs = dict(audio_duration=756.0, elapsed=274.0, audio_done=756.0)
-    assert TranscriptionWorker._estimate_progress_ceiling(
+    assert TranscriptionRunner._estimate_progress_ceiling(
         device="some-future-npu", **kwargs
     ) == pytest.approx(
-        TranscriptionWorker._estimate_progress_ceiling(device="cpu", **kwargs)
+        TranscriptionRunner._estimate_progress_ceiling(device="cpu", **kwargs)
     )
 
 
@@ -401,25 +457,25 @@ def test_unknown_device_falls_back_to_the_pessimistic_factor():
 )
 def test_degenerate_measurements_fall_back_to_the_default(audio_duration, elapsed, audio_done):
     """A zero-length or unmeasured file must not produce a nonsense ceiling."""
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
-    assert TranscriptionWorker._estimate_progress_ceiling(
+    assert TranscriptionRunner._estimate_progress_ceiling(
         audio_duration=audio_duration, elapsed=elapsed, audio_done=audio_done, device="mps"
-    ) == TranscriptionWorker.DEFAULT_TRANSCRIBE_CEILING
+    ) == TranscriptionRunner.DEFAULT_TRANSCRIBE_CEILING
 
 
 @pytest.mark.parametrize("elapsed", [1.0, 100000.0])  # absurdly fast, absurdly slow
 def test_extreme_throughput_is_clamped(elapsed):
     """Neither phase may be squeezed out of the bar by a wild measurement."""
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
-    ceiling = TranscriptionWorker._estimate_progress_ceiling(
+    ceiling = TranscriptionRunner._estimate_progress_ceiling(
         audio_duration=756.0, elapsed=elapsed, audio_done=756.0, device="cpu"
     )
     assert (
-        TranscriptionWorker.MIN_TRANSCRIBE_CEILING
+        TranscriptionRunner.MIN_TRANSCRIBE_CEILING
         <= ceiling
-        <= TranscriptionWorker.MAX_TRANSCRIBE_CEILING
+        <= TranscriptionRunner.MAX_TRANSCRIBE_CEILING
     )
 
 
@@ -430,9 +486,9 @@ def test_diarization_always_keeps_a_usable_share_of_the_bar():
     runs for minutes just five integer steps of a 0-100 QProgressBar. However
     the ceiling is computed, it must never squeeze speaker ID back to that.
     """
-    from src.core.transcriber import TranscriptionWorker
+    from src.core.runner import TranscriptionRunner
 
-    reserved = 100.0 - TranscriptionWorker.MAX_TRANSCRIBE_CEILING
+    reserved = 100.0 - TranscriptionRunner.MAX_TRANSCRIBE_CEILING
     assert reserved >= 8.0, f"only {reserved:.0f} integer steps reserved for speaker ID"
 
 
@@ -539,12 +595,19 @@ def test_start_transcription_connects_the_diarization_signal(
     assert worker.diarization_progress.slots == [main_window._on_diarization_progress]
 
 
-def test_worker_signal_reaches_the_window(main_window, qt_app):
-    """End to end through Qt: worker signal -> connected slot -> widgets."""
-    from src.core.transcriber import TranscriptionWorker
+def test_worker_signal_reaches_the_window(main_window, qt_app, monkeypatch):
+    """End to end through Qt: worker signal -> connected slot -> widgets.
 
-    worker = TranscriptionWorker.__new__(TranscriptionWorker)
-    TranscriptionWorker.__init__(worker, "/tmp/nonexistent.wav")
+    Constructed normally rather than via __new__, which the old version needed
+    to dodge QThread.__init__. The settings reads are stubbed so building a
+    worker in a test never touches the real Keychain.
+    """
+    from src.core import transcriber as tmod
+
+    monkeypatch.setattr(tmod, "get_hf_token", lambda: "")
+    monkeypatch.setattr(tmod, "is_speaker_id_enabled", lambda: False)
+
+    worker = tmod.TranscriptionWorker("/tmp/nonexistent.wav")
     worker.diarization_progress.connect(main_window._on_diarization_progress)
 
     worker.diarization_progress.emit(92.5, "Assigning speakers")
