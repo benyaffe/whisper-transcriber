@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.config import get_hf_token, save_hf_token, set_speaker_id_enabled
+from src.ui.theme import role
 
 SIGNUP_URL = "https://huggingface.co/join"
 TOKEN_URL = "https://huggingface.co/settings/tokens/new?tokenType=read"
@@ -108,12 +109,11 @@ class HuggingFaceWizard(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        heading = QLabel("<h3>Speaker names</h3>")
-        layout.addWidget(heading)
+        layout.addWidget(role(QLabel("Speaker names"), "h1"))
 
         why = QLabel(WHAT_IT_BUYS)
         why.setWordWrap(True)
-        why.setStyleSheet("color: #444;")
+        role(why, "muted")
         layout.addWidget(why)
 
         cost = QLabel(
@@ -121,7 +121,7 @@ class HuggingFaceWizard(QDialog):
             "your own machine; nothing is uploaded."
         )
         cost.setWordWrap(True)
-        cost.setStyleSheet("color: #666;")
+        role(cost, "faint")
         layout.addWidget(cost)
 
         layout.addSpacing(6)
@@ -172,6 +172,7 @@ class HuggingFaceWizard(QDialog):
         buttons.addWidget(self.check_button)
 
         self.done_button = QPushButton("Done")
+        role(self.done_button, "primary")
         self.done_button.setDefault(True)
         self.done_button.setEnabled(False)
         self.done_button.clicked.connect(self._finish)

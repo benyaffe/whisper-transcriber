@@ -15,6 +15,7 @@ import atexit
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
+from src.ui import theme
 from src.ui.main_window import MainWindow
 
 
@@ -111,6 +112,7 @@ def main():
 
     app = PodcastNotesApp(sys.argv)
     app.setApplicationName("PodcastNotesWT")
+    theme.apply(app)
     app.setOrganizationName("WhisperTranscriber")
 
     # Ensure app quits when window is closed (prevent respawn)

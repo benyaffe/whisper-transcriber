@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 from src.podcastnotes.checks_account import ACCOUNT_CHECKS
 from src.podcastnotes.checks_local import LOCAL_CHECKS
 from src.podcastnotes.readiness import Readiness, Result, State
+from src.ui.theme import restyle, role
 
 # Local checks first: they are fast, they need no accounts, and getting three
 # ticks immediately tells somebody the app itself is fine and the rest is
@@ -118,7 +119,7 @@ class CheckRow(QFrame):
         self.title = QLabel(f"<b>{self.check.title}</b>")
         text.addWidget(self.title)
         self.purpose = QLabel(self.check.purpose)
-        self.purpose.setStyleSheet("color: #666;")
+        role(self.purpose, "muted")
         text.addWidget(self.purpose)
         self.detail = QLabel("")
         self.detail.setWordWrap(True)
@@ -160,9 +161,8 @@ class CheckRow(QFrame):
         if result.remedy and not result.ok:
             parts.append(f"<i>{result.remedy}</i>")
         self.detail.setText("<br>".join(p for p in parts if p))
-        self.detail.setStyleSheet(
-            "color: #b3261e;" if result.state is State.FAILED else "color: #444;"
-        )
+        role(self.detail, "danger" if result.state is State.FAILED else "muted")
+        restyle(self.detail)
 
         self._url = result.url
         self.link_button.setVisible(bool(result.url))
@@ -203,8 +203,7 @@ class SetupView(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
 
-        heading = QLabel("<h2>Setup</h2>")
-        layout.addWidget(heading)
+        layout.addWidget(role(QLabel("Setup"), "h1"))
         self.summary = QLabel("Checking what is working...")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
@@ -233,6 +232,7 @@ class SetupView(QWidget):
         controls.addWidget(self.recheck_button)
         controls.addStretch()
         self.continue_button = QPushButton("Continue")
+        role(self.continue_button, "primary")
         self.continue_button.setDefault(True)
         self.continue_button.setEnabled(False)
         self.continue_button.clicked.connect(self.ready.emit)

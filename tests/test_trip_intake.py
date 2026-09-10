@@ -119,7 +119,7 @@ def test_speakers_without_a_token_blocks_and_names_settings(view, audio_files, m
     problem = view._problem()
 
     assert "Settings" in problem
-    assert "Multiple speakers" in problem
+    assert "Name the speakers" in problem, "name the control the way the screen does"
     assert started(view) == []
     assert IntakeView._needs_token(problem), "should offer to open Settings"
 
@@ -226,3 +226,127 @@ def test_good_files_are_kept_when_others_are_rejected(view, audio_files, tmp_pat
     view.add_sources([audio_files[0], str(bad), audio_files[1]])
 
     assert view.recordings.sources() == [audio_files[0], audio_files[1]]
+
+
+# --- what the screen asks for -------------------------------------------------
+#
+# Three pieces of copy were actively misleading. These pin the fixes, because
+# wording drifts back without something holding it.
+
+
+def test_the_screen_does_not_ask_for_recordings_in_order(qt_app):
+    """Order is recoverable from the recordings themselves. Asking for it put
+    the cost of a solvable problem onto the person.
+
+    Reads the widgets rather than the source, because the module docstring
+    quotes the old wording while explaining why it went.
+    """
+    from PyQt6.QtWidgets import QLabel
+
+    from src.ui.podcastnotes.intake_view import IntakeView
+
+    view = IntakeView()
+    try:
+        shown = " ".join(
+            label.text() for label in view.findChildren(QLabel)
+        ).lower()
+
+        assert "order they happened" not in shown
+        assert "in the order" not in shown
+    finally:
+        view.deleteLater()
+
+
+def test_the_description_reads_as_a_seed_not_as_homework(qt_app):
+    """It looked like a request for full context, which made the quality of
+    the write-up seem to depend on how much you typed."""
+    from src.ui.podcastnotes.intake_view import DESCRIPTION_HINT
+
+    assert "Glean" in DESCRIPTION_HINT, "say where the rest of the context comes from"
+    assert "search" in DESCRIPTION_HINT.lower()
+    assert "plenty" in DESCRIPTION_HINT or "sentence" in DESCRIPTION_HINT
+
+
+def test_the_speaker_option_describes_the_outcome(qt_app):
+    """"Multiple speakers" named a mechanism. What somebody wants to know is
+    whether the transcript will say who spoke."""
+    from src.ui.podcastnotes.intake_view import SPEAKERS_HINT, IntakeView
+
+    view = IntakeView()
+    try:
+        assert view.speakers_checkbox.text() == "Name the speakers"
+    finally:
+        view.deleteLater()
+
+    assert "who spoke" in SPEAKERS_HINT
+    assert "Speaker 1" in SPEAKERS_HINT, "show what the alternative looks like"
+
+
+def test_the_link_field_says_a_link_to_what(qt_app):
+    """"Add URL..." did not say a URL to what."""
+    from src.ui.podcastnotes.intake_view import IntakeView
+
+    view = IntakeView()
+    try:
+        placeholder = view.url_input.placeholderText().lower()
+
+        assert "recording" in placeholder
+        assert any(site in placeholder for site in ("youtube", "vimeo", "drive"))
+    finally:
+        view.deleteLater()
+
+
+# --- the screen gets out of its own way ---------------------------------------
+
+
+def test_the_drop_zone_shrinks_once_there_are_recordings(qt_app, tmp_path):
+    """A full-height target is right for an empty screen and wrong once it
+    has been used, where it only pushes the content down."""
+    from src.ui.podcastnotes.intake_view import IntakeView
+
+    view = IntakeView()
+    try:
+        tall = view.drop_zone.minimumHeight()
+        view.recordings.add(str(tmp_path / "a.m4a"))
+        view._refresh()
+
+        assert view.drop_zone.minimumHeight() < tall
+        assert view.drop_zone.sublabel.isHidden()
+    finally:
+        view.deleteLater()
+
+
+def test_the_list_and_remove_button_are_hidden_when_empty(qt_app):
+    from src.ui.podcastnotes.intake_view import IntakeView
+
+    view = IntakeView()
+    view.show()
+    try:
+        assert view.recordings.isHidden()
+        assert view.remove_button.isHidden()
+    finally:
+        view.close()
+        view.deleteLater()
+
+
+def test_the_list_grows_with_its_contents_up_to_a_limit(qt_app, tmp_path):
+    """Two recordings should not occupy the space of ten, and thirty should
+    not push Start off the bottom of the screen."""
+    from src.ui.podcastnotes.intake_view import RecordingList
+
+    listing = RecordingList()
+    try:
+        listing.add(str(tmp_path / "one.m4a"))
+        one = listing.height()
+        listing.add(str(tmp_path / "two.m4a"))
+        two = listing.height()
+
+        assert two > one
+
+        for i in range(30):
+            listing.add(str(tmp_path / f"more{i}.m4a"))
+
+        cap = RecordingList.MAX_VISIBLE_ROWS * RecordingList.ROW_HEIGHT + 12
+        assert listing.height() == cap
+    finally:
+        listing.deleteLater()

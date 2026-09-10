@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # These used to be defined here, which made src/core import src/ui.
 # src/core/config.py is now their only home.
+from src.ui.theme import role
 from src.core.config import (
     get_hf_token,
     is_speaker_id_enabled,
@@ -75,7 +76,7 @@ class SettingsDialog(QDialog):
             "Requires a free HuggingFace account and access token."
         )
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #666; margin-left: 20px;")
+        role(self.info_label, "muted")
         speaker_layout.addWidget(self.info_label)
 
         # Token section (shown when enabled)
@@ -150,6 +151,7 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(cancel_btn)
 
         self.save_btn = QPushButton("Save")
+        role(self.save_btn, "primary")
         self.save_btn.setDefault(True)
         self.save_btn.clicked.connect(self._save_settings)
         button_layout.addWidget(self.save_btn)
@@ -175,7 +177,7 @@ class SettingsDialog(QDialog):
             "lands on your cost center. Sign in first, then find your projects."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666;")
+        role(hint, "muted")
         box.addWidget(hint)
 
         row = QHBoxLayout()
@@ -190,7 +192,7 @@ class SettingsDialog(QDialog):
 
         self.project_status = QLabel("")
         self.project_status.setWordWrap(True)
-        self.project_status.setStyleSheet("color: #666;")
+        role(self.project_status, "muted")
         box.addWidget(self.project_status)
         return group
 
@@ -204,7 +206,7 @@ class SettingsDialog(QDialog):
             "can see."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666;")
+        role(hint, "muted")
         box.addWidget(hint)
 
         form = QFormLayout()
