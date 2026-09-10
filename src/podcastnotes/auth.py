@@ -1,10 +1,9 @@
 """
-Signing in to Google, once, for two things at the same time.
+Signing in to Google so Claude can be called on the user's own Vertex project.
 
-The same consent screen carries `cloud-platform` (so Claude can be called on
-the user's own Vertex project) and `drive.file` (so the finished document can
-be published). One sign-in, two capabilities, and critically **no gcloud**:
-nobody installs a 500MB SDK or opens a Terminal.
+Critically, **no gcloud**: nobody installs a 500MB SDK or opens a Terminal.
+Application Default Credentials are used when they happen to exist, so anyone
+who already has gcloud is not asked to sign in twice.
 
 Each colleague sits on a different Vertex project because they are on different
 cost centers, so the project is a per-user setting rather than a constant. That
@@ -19,14 +18,15 @@ import os
 
 from src.core.config import KEYRING_SERVICE
 
-# Both scopes on one consent screen. cloud-platform is broad and sensitive, but
-# the OAuth client is Internal to the Workspace, which exempts it from Google's
-# verification review. drive.file is deliberately narrow: it grants access only
-# to files this app itself created, so it can publish without being able to
-# read anything else in the user's Drive.
+# One scope, and only one. cloud-platform is what Vertex needs so Claude can
+# be called on the user's own project.
+#
+# drive.file used to be here as well, for publishing. It is gone: the finished
+# document now reaches Google Docs through the clipboard, which needs no scope
+# at all. Asking for access to somebody's Drive in order to do something the
+# clipboard already does would be hard to justify and harder to get approved.
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/cloud-platform",
-    "https://www.googleapis.com/auth/drive.file",
 ]
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -150,14 +150,12 @@ SOURCE_GCLOUD = "gcloud"
 def stored_credentials():
     """Whatever Google credentials this machine has, or None.
 
-    The app's own sign-in first, because it is the one that covers Drive as
-    well. Application Default Credentials second, which is what somebody with
-    gcloud already has: it carries cloud-platform and therefore Claude, but
-    not drive.file, so publishing still needs the app's own sign-in.
+    The app's own sign-in first. Application Default Credentials second, which
+    is what somebody with gcloud already has. Both carry cloud-platform, so
+    either one is enough for everything the app does.
 
-    The access token is deliberately not cached. Both the Anthropic client and
-    google-api-python-client refresh on demand, and a token in the Keychain
-    would be stale within the hour.
+    The access token is deliberately not cached. The Anthropic client refreshes
+    on demand, and a token in the Keychain would be stale within the hour.
     """
     from google.oauth2.credentials import Credentials
 
@@ -201,16 +199,6 @@ def credentials_source() -> str:
     if application_default_credentials() is not None:
         return SOURCE_GCLOUD
     return ""
-
-
-def covers_drive() -> bool:
-    """Whether the current credentials can create a document.
-
-    gcloud's default credentials carry cloud-platform but not drive.file, so
-    Claude works and publishing does not. Saying so up front beats discovering
-    it after a trip has finished running.
-    """
-    return credentials_source() == SOURCE_APP
 
 
 def ensure_fresh(credentials):

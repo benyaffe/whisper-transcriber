@@ -420,20 +420,19 @@ def test_every_state_has_a_mark_and_a_colour():
         assert state in COLOURS
 
 
-def test_the_real_list_is_seven_rows_not_five():
-    """The plan said five. Seven is the honest number.
+def test_the_real_list_is_six_rows():
+    """It was seven. Drive went when publishing moved to the clipboard.
 
-    Google splits into three because they are three different failures with
-    three different remedies: signed out, Claude never enabled in Model
-    Garden, and Drive refusing to create a document. Collapsing them into one
-    "Google" row would mean a red tick that cannot say which of the three it
-    is, on the screen whose only job is saying exactly that.
+    Google and Claude stay separate because they are different failures with
+    different remedies: signed out, versus Claude never enabled in Model
+    Garden. One combined row could not say which.
     """
     from src.ui.podcastnotes.setup_view import ALL_CHECKS
 
     keys = [c.key for c in ALL_CHECKS]
 
-    assert keys == ["ffmpeg", "models", "huggingface", "google", "claude", "drive", "glean"]
+    assert keys == ["ffmpeg", "models", "huggingface", "google", "claude", "glean"]
+    assert "drive" not in keys, "publishing needs no connection to check"
 
 
 def test_the_fast_local_checks_come_first():

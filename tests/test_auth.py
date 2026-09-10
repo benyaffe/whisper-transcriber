@@ -109,22 +109,6 @@ def test_signed_out_means_no_credentials(monkeypatch):
     assert auth.stored_credentials() is None
 
 
-def test_credentials_carry_both_scopes(monkeypatch):
-    """One consent screen has to cover calling Claude and publishing the doc.
-
-    If these ever diverge, publishing fails after the expensive part has
-    already run.
-    """
-    monkeypatch.setenv(auth.CLIENT_ID_ENV, "id")
-    monkeypatch.setenv(auth.CLIENT_SECRET_ENV, "secret")
-    monkeypatch.setattr(auth, "get_refresh_token", lambda: "refresh-xyz")
-
-    credentials = auth.stored_credentials()
-
-    assert "https://www.googleapis.com/auth/cloud-platform" in credentials.scopes
-    assert "https://www.googleapis.com/auth/drive.file" in credentials.scopes
-
-
 def test_no_access_token_is_cached(monkeypatch):
     """It would be stale within the hour, and both clients refresh on demand."""
     monkeypatch.setenv(auth.CLIENT_ID_ENV, "id")
@@ -145,14 +129,13 @@ def test_the_refresh_token_shares_the_existing_keychain_service():
 
 
 def test_the_apps_own_sign_in_wins_over_gcloud(monkeypatch):
-    """It is the only one that also covers publishing."""
+    """Either works, but the app's own is the one a colleague will have."""
     monkeypatch.setenv(auth.CLIENT_ID_ENV, "id")
     monkeypatch.setenv(auth.CLIENT_SECRET_ENV, "secret")
     monkeypatch.setattr(auth, "get_refresh_token", lambda: "app-refresh")
     monkeypatch.setattr(auth, "application_default_credentials", lambda: object())
 
     assert auth.credentials_source() == auth.SOURCE_APP
-    assert auth.covers_drive() is True
 
 
 def test_gcloud_credentials_are_used_when_there_is_nothing_else(monkeypatch):
@@ -166,37 +149,12 @@ def test_gcloud_credentials_are_used_when_there_is_nothing_else(monkeypatch):
     assert auth.credentials_source() == auth.SOURCE_GCLOUD
 
 
-def test_gcloud_credentials_do_not_cover_publishing(monkeypatch):
-    """They carry cloud-platform but not drive.file, so Claude works and
-    creating a document does not. Saying so up front beats finding out after
-    a trip has finished running."""
-    monkeypatch.setattr(auth, "get_refresh_token", lambda: "")
-    monkeypatch.setattr(auth, "application_default_credentials", lambda: object())
-
-    assert auth.covers_drive() is False
-
-
 def test_no_credentials_at_all(monkeypatch):
     monkeypatch.setattr(auth, "get_refresh_token", lambda: "")
     monkeypatch.setattr(auth, "application_default_credentials", lambda: None)
 
     assert auth.stored_credentials() is None
     assert auth.credentials_source() == ""
-
-
-def test_the_drive_check_refuses_to_call_with_gcloud_credentials(monkeypatch):
-    """Calling anyway produces a scope error that reads like a bug."""
-    from src.podcastnotes import checks_account
-
-    monkeypatch.setattr(auth, "stored_credentials", lambda: object())
-    monkeypatch.setattr(auth, "covers_drive", lambda: False)
-    monkeypatch.setattr(auth, "is_configured", lambda: True)
-
-    result = checks_account.check_drive()
-
-    assert result.state is State.FAILED
-    assert "gcloud" in result.detail
-    assert result.action == "Sign in"
 
 
 def test_an_expired_sign_in_is_described_as_routine(monkeypatch):
@@ -221,7 +179,7 @@ def test_an_expired_sign_in_is_described_as_routine(monkeypatch):
     assert result.action == "Sign in again"
 
 
-def test_a_gcloud_signed_in_google_row_says_what_it_does_not_cover(monkeypatch):
+def test_a_gcloud_signed_in_google_row_says_which_credential_it_used(monkeypatch):
     from src.podcastnotes import checks_account
 
     monkeypatch.setattr(auth, "stored_credentials", lambda: object())
@@ -231,7 +189,7 @@ def test_a_gcloud_signed_in_google_row_says_what_it_does_not_cover(monkeypatch):
     result = checks_account.check_google()
 
     assert result.state is State.OK
-    assert "publishing" in result.detail
+    assert "gcloud" in result.detail
 
 
 # --- listing projects ---------------------------------------------------------
@@ -710,80 +668,6 @@ def test_a_revoked_refresh_token_reads_as_sign_in_again(monkeypatch):
 # --- the Drive check does the real thing --------------------------------------
 
 
-def test_the_drive_check_creates_and_deletes_a_real_document(monkeypatch):
-    """`drive.file` being narrow and `drive.file` being sufficient are two
-    different claims. Only one of them can be assumed."""
-    from src.podcastnotes import checks_account
-
-    calls = {"created": None, "deleted": None}
-
-    class FakeFiles:
-        def create(self, body=None, media_body=None, fields=None):
-            calls["created"] = body
-            calls["media"] = media_body
-            return _Execute({"id": "doc-1"})
-
-        def delete(self, fileId=None):
-            calls["deleted"] = fileId
-            return _Execute({})
-
-    _install_fake_drive(monkeypatch, FakeFiles())
-
-    result = checks_account.check_drive()
-
-    assert result.state is State.OK
-    assert calls["created"]["mimeType"] == "application/vnd.google-apps.document"
-    assert calls["deleted"] == "doc-1", "the check left a document behind"
-
-
-def test_the_drive_check_uploads_markdown_like_publishing_does(monkeypatch):
-    """Checking with an empty file would prove less than the check appears to:
-    publishing relies on Drive converting Markdown server-side."""
-    from src.podcastnotes import checks_account
-
-    seen = {}
-
-    class FakeFiles:
-        def create(self, body=None, media_body=None, fields=None):
-            seen["mimetype"] = media_body.mimetype()
-            return _Execute({"id": "doc-1"})
-
-        def delete(self, fileId=None):
-            return _Execute({})
-
-    _install_fake_drive(monkeypatch, FakeFiles())
-
-    checks_account.check_drive()
-
-    assert seen["mimetype"] == "text/markdown"
-
-
-def test_a_failed_cleanup_is_untidy_not_broken(monkeypatch):
-    """Creating worked, which is the thing publishing needs."""
-    from src.podcastnotes import checks_account
-
-    class FakeFiles:
-        def create(self, body=None, media_body=None, fields=None):
-            return _Execute({"id": "doc-1"})
-
-        def delete(self, fileId=None):
-            raise RuntimeError("insufficient permissions")
-
-    _install_fake_drive(monkeypatch, FakeFiles())
-
-    result = checks_account.check_drive()
-
-    assert result.state is State.OK
-    assert "left behind" in result.detail
-
-
-def test_the_probe_document_says_it_is_safe_to_delete():
-    """Somebody will find one in their Drive. It should explain itself."""
-    from src.podcastnotes.checks_account import PROBE_DOC_NAME
-
-    assert "delete" in PROBE_DOC_NAME.lower()
-
-
 class _Execute:
     def __init__(self, value):
         self._value = value
@@ -792,34 +676,22 @@ class _Execute:
         return self._value
 
 
-def _install_fake_drive(monkeypatch, files):
-    import googleapiclient.discovery
-
-    from src.podcastnotes import auth as auth_mod
-
-    monkeypatch.setattr(auth_mod, "stored_credentials", lambda: object())
-    monkeypatch.setattr(auth_mod, "ensure_fresh", lambda c: c)
-    monkeypatch.setattr(auth_mod, "covers_drive", lambda: True)
-
-    class FakeService:
-        def files(self):
-            return files
-
-    monkeypatch.setattr(
-        googleapiclient.discovery, "build", lambda *a, **k: FakeService()
-    )
-
-
-# --- the shape of the list ----------------------------------------------------
-
-
-def test_claude_and_drive_both_wait_on_the_google_sign_in():
-    """Neither can be judged before there are credentials, and reporting them
-    as broken would send somebody to fix the wrong row."""
+def test_claude_waits_on_the_google_sign_in():
+    """It cannot be judged before there are credentials, and reporting it as
+    broken would send somebody to fix the wrong row."""
     from src.podcastnotes.checks_account import ACCOUNT_CHECKS
 
     by_key = {c.key: c for c in ACCOUNT_CHECKS}
 
     assert by_key["claude"].requires == ["google"]
-    assert by_key["drive"].requires == ["google"]
     assert by_key["google"].requires == []
+    assert "drive" not in by_key, "publishing goes through the clipboard now"
+
+
+def test_the_app_asks_for_no_more_than_it_needs():
+    """drive.file was dropped when publishing moved to the clipboard. Asking
+    for access to somebody's Drive to do what the clipboard already does would
+    be hard to justify and harder to get approved."""
+    assert auth.GOOGLE_SCOPES == [
+        "https://www.googleapis.com/auth/cloud-platform"
+    ]
