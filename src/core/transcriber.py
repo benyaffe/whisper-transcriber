@@ -197,7 +197,7 @@ class TranscriptionWorker(QThread):
         self._last_segment_time = time.time()
         self._logger = get_logger()
         self.audio_path: Optional[str] = None
-        self._temp_audio = False
+        self._temp_dir: Optional[str] = None
         self._will_diarize = False
         self._progress_ceiling = self.DEFAULT_TRANSCRIBE_CEILING
         # Populated by _run_diarization, consumed by the JSON export.
@@ -217,6 +217,10 @@ class TranscriptionWorker(QThread):
                 for line in traceback.format_exc().rstrip().splitlines():
                     self.status_message.emit(f"[  {line}]")
                 self.error.emit(f"{type(e).__name__}: {e}")
+        finally:
+            # Success, failure and cancellation all have to release the
+            # snapshot; the cancel path in particular used to leak on every use.
+            self._cleanup_temp_audio()
 
     def _transcribe(self):
         """Main transcription workflow."""
@@ -407,7 +411,6 @@ class TranscriptionWorker(QThread):
         being moved or deleted mid-run (folder watchers, archival scripts)."""
         info = get_file_info(self.filepath)
         if info.get('has_video') and info.get('has_audio'):
-            self._temp_audio = True
             return extract_audio(self.filepath)
         return self._snapshot_audio(self.filepath)
 
@@ -420,8 +423,22 @@ class TranscriptionWorker(QThread):
             os.link(src, dst)
         except OSError:
             shutil.copyfile(src, dst)
-        self._temp_audio = True
+        # Remembered so _cleanup_temp_audio can remove it. A hardlink costs
+        # nothing, but a cross-volume source (external drive, network share)
+        # falls through to a full copy that used to be left behind forever.
+        self._temp_dir = tmp_dir
         return dst
+
+    def _cleanup_temp_audio(self):
+        """Remove the snapshot directory, if we made one. Never raises."""
+        if not self._temp_dir:
+            return
+        import shutil
+        try:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._logger.info(f"Removed temp audio snapshot: {self._temp_dir}")
+        finally:
+            self._temp_dir = None
 
     @classmethod
     def _estimate_progress_ceiling(
