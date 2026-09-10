@@ -510,7 +510,7 @@ class _FakeWorker:
 
     SIGNALS = (
         "status_message", "progress", "diarization_progress", "segment_ready",
-        "language_detected", "model_upgraded", "quality_warning",
+        "language_detected", "quality_warning",
         "hardware_info", "audio_ready", "completed", "error",
     )
 

@@ -735,7 +735,6 @@ class MainWindow(QMainWindow):
         self.transcription_worker.diarization_progress.connect(self._on_diarization_progress)
         self.transcription_worker.segment_ready.connect(self._on_segment_ready)
         self.transcription_worker.language_detected.connect(self._on_language_detected)
-        self.transcription_worker.model_upgraded.connect(self._on_model_upgraded)
         self.transcription_worker.quality_warning.connect(self._on_quality_warning)
         self.transcription_worker.hardware_info.connect(self._on_hardware_info)
         self.transcription_worker.audio_ready.connect(self._load_audio)
@@ -806,10 +805,6 @@ class MainWindow(QMainWindow):
 
     def _on_hardware_info(self, info: str):
         self.model_label.setText(f"Model: {self.model_combo.currentText()} | {info}")
-
-    def _on_model_upgraded(self, old_model: str, new_model: str, reason: str):
-        self.model_label.setText(f"Model: {new_model} (upgraded)")
-        self._on_status_message(f"[Upgraded to {new_model}: {reason}]")
 
     def _on_quality_warning(self, message: str):
         if self.current_item:

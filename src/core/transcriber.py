@@ -151,7 +151,6 @@ class TranscriptionWorker(QThread):
     status_message = pyqtSignal(str)  # status updates (rendered as gray italic)
     segment_ready = pyqtSignal(float, float, str, str)  # start, end, text, speaker
     language_detected = pyqtSignal(str, float)  # language, confidence
-    model_upgraded = pyqtSignal(str, str, str)  # old_model, new_model, reason
     quality_warning = pyqtSignal(str)  # warning message
     hardware_info = pyqtSignal(str)  # hardware description
     audio_ready = pyqtSignal(str)  # audio path for playback
@@ -360,35 +359,24 @@ class TranscriptionWorker(QThread):
                 else:
                     self.progress.emit(percent, 0)
 
-            # Quality assessment at 2 minutes
+            # Quality assessment at 2 minutes. Warns; does not act. There used
+            # to be an automatic medium-to-large upgrade here, but it never
+            # worked: it rebound segments_gen inside `for segment in
+            # segments_gen`, and Python bound that iterator once at loop entry.
+            # The rebind did nothing, so the run threw away its first two
+            # minutes, loaded and paid for the large model, never used it, and
+            # told the user it had upgraded. Removed rather than repaired:
+            # large needs ~10GB and the model is now fixed for a whole run.
             if not assessed and segment.end >= self.ASSESSMENT_DURATION:
                 assessed = True
                 quality = self._assess_quality()
 
                 if (quality.avg_confidence < self.CONFIDENCE_THRESHOLD or
                         quality.low_confidence_ratio > self.LOW_CONFIDENCE_RATIO_THRESHOLD):
-
-                    if self.model_size != "large":
-                        old_model = self.model_size
-                        self.model_size = "large"
-                        self.model_upgraded.emit(
-                            old_model, "large",
-                            f"Low confidence ({quality.avg_confidence:.0%})"
-                        )
-                        self.segments = []
-                        model = WhisperModel("large", device=device, compute_type=compute_type)
-                        segments_gen, trans_info = model.transcribe(
-                            self.audio_path,
-                            beam_size=5,
-                            word_timestamps=True,
-                            vad_filter=True,
-                            language=self.language
-                        )
-                        continue
-                    else:
-                        self.quality_warning.emit(
-                            f"Quality issues detected ({quality.avg_confidence:.0%} confidence)"
-                        )
+                    self.quality_warning.emit(
+                        f"Quality issues detected ({quality.avg_confidence:.0%} confidence). "
+                        f"Try the large model for this file."
+                    )
 
         # Step 6: Speaker diarization
         if self._cancelled:

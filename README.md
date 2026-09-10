@@ -81,4 +81,6 @@ the one hand-maintained copy; update it if that constant changes.
 
 ## Model Selection
 
-Starts with `medium` model. If confidence is low after 120 seconds, automatically restarts with `large` model.
+Defaults to the `medium` model, chosen in the sidebar and fixed for the whole run. If confidence
+looks low after the first two minutes the app warns and suggests re-running with `large`, rather than
+switching models mid-transcription.

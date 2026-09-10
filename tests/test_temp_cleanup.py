@@ -134,3 +134,63 @@ def test_run_cleans_up_on_success(tmp_path, monkeypatch):
     worker.run()
 
     assert not os.path.exists(snapshot_dir["path"]), "leaked on the success path"
+
+
+# --- model stability ----------------------------------------------------------
+
+
+def test_model_size_is_never_mutated_mid_run():
+    """The auto-upgrade used to rebind self.model_size half way through a run.
+
+    It never actually took effect, because it also rebound segments_gen inside
+    `for segment in segments_gen`, and Python binds that iterator once. The net
+    result was a discarded two minutes of transcript, a large model loaded and
+    never used, and a UI claiming an upgrade that did not happen.
+
+    Guarding it here because the JSON metadata and the diarization device
+    selection both read model_size, and a mid-run change makes both wrong.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from src.core import transcriber
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(transcriber.TranscriptionWorker)))
+
+    # Real assignment statements only. A substring match would also catch
+    # `check_memory_available(self.model_size, ...)`, which is a read.
+    assigning_methods = []
+    for method in ast.walk(tree):
+        if not isinstance(method, ast.FunctionDef):
+            continue
+        for node in ast.walk(method):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+                targets = [node.target]
+            for t in targets:
+                if (
+                    isinstance(t, ast.Attribute)
+                    and t.attr == "model_size"
+                    and isinstance(t.value, ast.Name)
+                    and t.value.id == "self"
+                ):
+                    assigning_methods.append(method.name)
+
+    assert assigning_methods == ["__init__"], (
+        f"model_size is assigned outside __init__, in: {assigning_methods}"
+    )
+
+
+def test_low_confidence_warns_rather_than_switching_models():
+    """The quality check still fires; it just no longer tries to act on it."""
+    import inspect
+
+    from src.core import transcriber
+
+    source = inspect.getsource(transcriber.TranscriptionWorker._transcribe)
+
+    assert "quality_warning.emit" in source
+    assert "WhisperModel(\"large\"" not in source, "the dead upgrade path is back"
