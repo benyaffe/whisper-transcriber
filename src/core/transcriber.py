@@ -7,7 +7,7 @@ import os
 import time
 import platform
 import psutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -54,6 +54,15 @@ def check_memory_available(model_size: str, file_duration_minutes: float) -> tup
 
 
 @dataclass
+class WordTiming:
+    """One word with its own timing, from Whisper's word_timestamps pass."""
+    start: float
+    end: float
+    word: str
+    probability: float
+
+
+@dataclass
 class TranscriptionSegment:
     """A segment of transcribed text with timing, confidence, and speaker."""
     start: float
@@ -61,6 +70,10 @@ class TranscriptionSegment:
     text: str
     confidence: float
     speaker: Optional[str] = None
+    # Whisper computes these whenever word_timestamps=True. They used to be
+    # read once for an average confidence and dropped; the JSON export needs
+    # them so a later rewrite of the text can keep accurate timings.
+    words: list[WordTiming] = field(default_factory=list)
 
 
 @dataclass
@@ -286,15 +299,26 @@ class TranscriptionWorker(QThread):
             self._last_segment_time = now
 
             # Calculate confidence
-            word_confs = [w.probability for w in segment.words] if segment.words else []
-            avg_conf = sum(word_confs) / len(word_confs) if word_confs else 0.8
+            words = [
+                WordTiming(
+                    start=w.start,
+                    end=w.end,
+                    word=w.word,
+                    probability=w.probability,
+                )
+                for w in (segment.words or [])
+            ]
+            avg_conf = (
+                sum(w.probability for w in words) / len(words) if words else 0.8
+            )
 
             trans_seg = TranscriptionSegment(
                 start=segment.start,
                 end=segment.end,
                 text=segment.text.strip(),
                 confidence=avg_conf,
-                speaker=None
+                speaker=None,
+                words=words,
             )
             self.segments.append(trans_seg)
             self.segment_ready.emit(segment.start, segment.end, segment.text.strip(), "")
