@@ -124,6 +124,45 @@ def check_drive():
     return ok("Can create documents")
 
 
+def check_glean():
+    """One real search, returning at least one document this person can see.
+
+    A credential that authenticates but returns nothing is not a working
+    setup: the whole point of Glean here is context, and a token scoped to
+    nothing produces a summary full of names Claude has never seen while
+    every indicator says green.
+    """
+    from src.podcastnotes import glean
+
+    if not glean.instance():
+        return failed(
+            "No Glean address set.",
+            remedy="Enter your company's Glean address. It is the one in your "
+                   "browser when you use Glean.",
+        )
+    if not glean.get_token():
+        return failed(
+            "No Glean credential.",
+            remedy="Create a personal Glean token and paste it in Settings.",
+            url="https://app.glean.com/admin/platform/tokenManagement",
+        )
+
+    results = glean.search(GLEAN_PROBE_QUERY, page_size=1)
+    if not results:
+        return failed(
+            "Glean answered, but found nothing you can see.",
+            remedy="The credential works but is not scoped to any content. "
+                   "Check it was made for your own account.",
+        )
+
+    return ok(f"Working, on {glean.instance()}")
+
+
+# Something every indexed workspace has. A query that returns nothing tells us
+# about the query, not the connection, so it needs to be genuinely generic.
+GLEAN_PROBE_QUERY = "meeting"
+
+
 ACCOUNT_CHECKS = [
     Check(
         key="google",
@@ -144,5 +183,11 @@ ACCOUNT_CHECKS = [
         purpose="Publishing the finished document",
         run=check_drive,
         requires=["google"],
+    ),
+    Check(
+        key="glean",
+        title="Glean",
+        purpose="Looking up who and what the trip involved",
+        run=check_glean,
     ),
 ]

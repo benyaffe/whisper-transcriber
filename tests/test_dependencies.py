@@ -37,6 +37,7 @@ IMPORT_TO_PACKAGE = {
     # from google-auth.
     "google": "google-auth",
     "googleapiclient": "google-api-python-client",
+    "glean": "glean-api-client",
 }
 
 # ── Imports that are intentionally optional / platform-specific ────────────────
