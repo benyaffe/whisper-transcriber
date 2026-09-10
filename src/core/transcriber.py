@@ -502,7 +502,13 @@ class TranscriptionWorker(QThread):
                 return
 
             self._diarization = result
-            speaker_map = assign_speakers_to_segments(self.segments, result.turns)
+            # Align against the non-overlapping view where pyannote gave us
+            # one. With the overlapping annotation, a segment spoken over by
+            # two people is attributed to whichever turn happens to be first in
+            # the list. For a group recording where people talk across each
+            # other, that is most of the interesting material.
+            alignment_turns = result.exclusive_turns or result.turns
+            speaker_map = assign_speakers_to_segments(self.segments, alignment_turns)
             self._speaker_map = speaker_map
             self._speaker_id_used = True
             # Debug: verify speakers were assigned
