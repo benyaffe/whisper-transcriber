@@ -442,6 +442,7 @@ def test_an_unconfigured_org_is_not_blamed_on_the_user(monkeypatch):
     assert result.state is State.FAILED
     assert "administrator" in result.remedy.lower()
     assert "sign in" not in result.remedy.lower(), "this is not theirs to fix"
+    assert result.fixable is False, "there is no button that could help"
 
 
 def test_being_signed_out_does_tell_them_to_sign_in(monkeypatch):

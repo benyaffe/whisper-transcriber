@@ -25,7 +25,10 @@ def check_ffmpeg():
     path = get_bundled_binary("ffmpeg")
     healthy, message = check_ffmpeg_health()
     if healthy:
-        return ok(message.replace("FFmpeg OK: ", ""))
+        # check_ffmpeg_health returns the first line of ffmpeg's banner,
+        # truncated to 50 characters, which lands mid-word. Nobody reading
+        # this list needs the copyright notice.
+        return ok(_version_from_banner(message))
 
     if os.path.isabs(path) and os.path.exists(path) and not os.access(path, os.X_OK):
         return failed(
@@ -36,6 +39,15 @@ def check_ffmpeg():
         message,
         remedy="Reinstall the app; the audio tool ships inside it.",
     )
+
+
+def _version_from_banner(message: str) -> str:
+    """"FFmpeg OK: ffmpeg version 9.0.1 Copyright (c) 2000-20" becomes
+    "Ready (version 9.0.1)"."""
+    import re
+
+    match = re.search(r"ffmpeg version (\S+)", message)
+    return f"Ready (version {match.group(1)})" if match else "Ready"
 
 
 def check_models():

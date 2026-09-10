@@ -23,7 +23,10 @@ def check_google():
             "Google sign-in has not been set up for your organisation yet.",
             remedy="An administrator needs to create the sign-in once, for "
                    "everybody. Send them the setup notes.",
-            # Deliberately not "fixable": no amount of clicking helps.
+            # Nothing to press. Until the OAuth client exists there is no
+            # sign-in to start, and a button that cannot work is worse than
+            # no button.
+            fixable=False,
         )
 
     credentials = auth.stored_credentials()

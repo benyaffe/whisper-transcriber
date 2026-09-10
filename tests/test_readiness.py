@@ -294,6 +294,17 @@ def test_ffmpeg_check_passes_on_a_working_install():
     assert check_ffmpeg().state is State.OK
 
 
+def test_the_ffmpeg_row_does_not_show_a_truncated_copyright_notice():
+    """The underlying helper returns ffmpeg's banner cut to 50 characters,
+    which lands mid-word. Nobody reading this list needs any of it."""
+    from src.podcastnotes.checks_local import _version_from_banner
+
+    banner = "FFmpeg OK: ffmpeg version 9.0.1 Copyright (c) 2000-20"
+
+    assert _version_from_banner(banner) == "Ready (version 9.0.1)"
+    assert _version_from_banner("FFmpeg OK: something unexpected") == "Ready"
+
+
 def test_ffmpeg_check_recognises_a_lost_execute_bit(tmp_path, monkeypatch):
     """The exact failure that happened during development.
 

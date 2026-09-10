@@ -173,6 +173,23 @@ def test_no_fix_button_on_a_row_that_is_only_waiting(qt_app):
         view.deleteLater()
 
 
+def test_no_fix_button_when_this_failure_is_somebody_elses_to_fix(qt_app):
+    """The check is normally fixable by pressing a button. This failure is not.
+
+    Until an administrator creates the OAuth client there is no sign-in to
+    start, so offering Fix would send every colleague to click something that
+    cannot work.
+    """
+    view = build(qt_app, [
+        stub("google", failed("not set up for your organisation", fixable=False)),
+    ])
+    try:
+        assert view.rows["google"].check.fixable is True, "the check itself is fixable"
+        assert view.rows["google"].fix_button.isHidden(), "but this failure is not"
+    finally:
+        view.deleteLater()
+
+
 def test_a_fix_button_appears_on_something_actionable(qt_app):
     view = build(qt_app, [stub("google", failed("signed out"))])
     try:

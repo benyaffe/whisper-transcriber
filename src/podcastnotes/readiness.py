@@ -63,6 +63,14 @@ class Result:
     remedy: str = ""
     # Somewhere to send them, when a page can fix it.
     url: str = ""
+    # Whether this particular failure is the user's to act on.
+    #
+    # Separate from Check.fixable, which is about the check in general, because
+    # one check can fail in ways with different owners. Google sign-in is
+    # normally a button somebody presses, but until an administrator creates
+    # the OAuth client there is nothing to press, and offering a button that
+    # cannot work is the exact failure this screen exists to avoid.
+    fixable: bool = True
 
     @property
     def ok(self) -> bool:
@@ -73,8 +81,8 @@ def ok(detail: str = "") -> Result:
     return Result(State.OK, detail=detail)
 
 
-def failed(detail: str, remedy: str = "", url: str = "") -> Result:
-    return Result(State.FAILED, detail=detail, remedy=remedy, url=url)
+def failed(detail: str, remedy: str = "", url: str = "", fixable: bool = True) -> Result:
+    return Result(State.FAILED, detail=detail, remedy=remedy, url=url, fixable=fixable)
 
 
 def blocked(detail: str) -> Result:
