@@ -14,6 +14,10 @@ typed. It is a seed: a few names and the app searches Glean from there.
 
 "Multiple speakers" named a mechanism rather than an outcome. What somebody
 wants to know is whether the transcript will say who spoke.
+
+Ordering is not asked for at all, and is not draggable either. It is worked
+out after transcription from what was said. See RecordingList for why the
+obvious shortcut does not work.
 """
 
 import os
@@ -46,21 +50,26 @@ SPEAKERS_HINT = (
 
 
 class RecordingList(QListWidget):
-    """The recordings in this trip.
+    """The recordings in this trip, in no particular order.
 
-    Order is not asked for. Several meetings in a day arrive in whatever order
-    the files were picked, and working out the real sequence is something the
-    transcript can answer later without troubling anybody now.
+    Deliberately not reorderable. Which meeting came first is worked out after
+    transcription, by reading what was said, because that is the only source
+    that actually knows.
+
+    File timestamps look like an easier answer and are not. On the Ashford
+    recordings every file reports a creation time within four seconds of the
+    others, because that is when they were copied off the device rather than
+    when they were recorded. Sorting by that would have produced a confident
+    wrong order, which is worse than no order at all.
     """
 
     changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.model().rowsMoved.connect(lambda *_: self.changed.emit())
         self.changed.connect(self._fit_to_contents)
 
     # Two recordings should not occupy the same space as ten. Beyond this many

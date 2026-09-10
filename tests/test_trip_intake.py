@@ -83,13 +83,34 @@ def test_a_url_is_shown_in_full_and_a_file_by_name(qt_app, audio_files):
     assert listing.sources()[0] == audio_files[0]
 
 
-def test_the_list_can_be_reordered_by_dragging(qt_app, audio_files):
-    """Which meeting came first is the operator's call."""
+def test_the_list_is_not_reorderable(qt_app, audio_files):
+    """Which meeting came first is worked out after transcription, from what
+    was said. Offering a drag handle would imply the app needs to be told,
+    and would let somebody get it wrong.
+    """
     listing = RecordingList()
     for p in audio_files:
         listing.add(p)
 
-    assert listing.dragDropMode() == listing.DragDropMode.InternalMove
+    assert listing.dragDropMode() == listing.DragDropMode.NoDragDrop
+
+
+def test_file_timestamps_are_not_used_to_infer_order(qt_app, audio_files):
+    """Measured on the real Ashford recordings, where all three report a
+    creation time within four seconds of each other: that is when they were
+    copied off the device, not when they were recorded. Sorting by it gives a
+    confident wrong order, which is worse than none.
+    """
+    import inspect
+
+    from src.ui.podcastnotes import intake_view
+
+    source = inspect.getsource(intake_view.RecordingList)
+
+    assert "getmtime" not in source
+    assert "getctime" not in source
+    assert "st_birthtime" not in source
+    assert "sort" not in source
 
 
 # --- validation ---------------------------------------------------------------
