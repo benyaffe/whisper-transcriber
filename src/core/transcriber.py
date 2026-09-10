@@ -290,16 +290,28 @@ class TranscriptionWorker(QThread):
         start_time = time.time()
         assessed = False
 
+        # Start the stall clock here, not in __init__. Everything above this
+        # point -- model load, a first-run model download, audio extraction --
+        # can easily take longer than SEGMENT_TIMEOUT, and the clock used to be
+        # running throughout, so a slow start killed the run with "appears
+        # stuck" before a single segment had been attempted.
+        self._last_segment_time = time.time()
+
         for segment in segments_gen:
             if self._cancelled:
                 return
 
-            # Watchdog: check for timeout (no progress)
+            # Stall check. Note what this can and cannot do: it only runs when
+            # the generator yields, so it reports a gap between two segments
+            # after the fact. It cannot fire while faster-whisper is genuinely
+            # wedged inside a blocking call, because then we never get here.
+            # Catching that needs a timer on another thread.
             now = time.time()
-            if now - self._last_segment_time > self.SEGMENT_TIMEOUT:
-                self._logger.error(f"Watchdog timeout: no segment for {self.SEGMENT_TIMEOUT}s")
+            gap = now - self._last_segment_time
+            if gap > self.SEGMENT_TIMEOUT:
+                self._logger.error(f"Watchdog: {gap:.0f}s gap between segments")
                 raise RuntimeError(
-                    f"Transcription appears stuck (no progress for {self.SEGMENT_TIMEOUT // 60} minutes). "
+                    f"Transcription stalled (no progress for {gap / 60:.0f} minutes). "
                     "The file may be corrupted or incompatible."
                 )
             self._last_segment_time = now
