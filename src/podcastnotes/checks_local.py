@@ -94,33 +94,63 @@ def _whisper_is_cached() -> bool:
         return False
 
 
+SKIP_LABEL = "Skip this"
+
+
 def check_huggingface():
     """The token that unlocks the speaker-identification models.
 
-    Validates against HuggingFace rather than merely checking a token exists.
-    A revoked token, or one whose owner never accepted the three model
-    licences, is indistinguishable from a good one until something calls with
-    it.
-    """
-    from src.core.config import get_hf_token
-    from src.core.diarization import validate_hf_token
+    Guided by default, because naming who said what is most of the value and
+    somebody who does not know what HuggingFace is will otherwise simply stop
+    here. Genuinely optional, though, so every failure offers a way past it:
+    without speaker names the transcript still gets written, it just says
+    "Speaker 1" instead of a person.
 
-    token = get_hf_token()
-    if not token:
+    Validates against HuggingFace rather than checking that a token exists. A
+    revoked token, or one whose owner never accepted the three model licences,
+    is indistinguishable from a good one until something calls with it.
+    """
+    from src.core.config import get_hf_token, is_speaker_id_enabled
+    from src.core.diarization import token_status
+
+    if not is_speaker_id_enabled():
+        # A deliberate choice, so it is not a problem and must not hold up the
+        # rest of the list.
+        return ok("Off, so transcripts will not name speakers")
+
+    status = token_status(get_hf_token())
+
+    if status.valid:
+        return ok(f"Signed in as '{status.username}', all licences accepted")
+
+    if status.problem == "empty":
         return failed(
-            "No token saved.",
-            remedy="Create a free HuggingFace account, make a read token, "
-                   "and paste it in Settings.",
-            url=HF_TOKEN_URL,
-            action="Add token",
+            "Not set up yet.",
+            remedy="Takes about two minutes: a free account, a token, and "
+                   "three licences to accept. Or skip it and go without "
+                   "speaker names.",
+            action="Set up",
+            skip_action=SKIP_LABEL,
         )
 
-    valid, message = validate_hf_token(token)
-    if valid:
-        return ok(message.replace("Token valid for ", "Signed in as "))
+    if status.problem == "licences":
+        remaining = ", ".join(m.name for m in status.missing_licences)
+        return failed(
+            status.detail,
+            remedy=f"Still to accept: {remaining}. Each one is a single "
+                   f"button on its page.",
+            action="Continue setup",
+            skip_action=SKIP_LABEL,
+            url=status.missing_licences[0].url,
+        )
 
-    # validate_hf_token already produces a good message with the licence links.
-    return failed(message, remedy="Accept the licences, then check again.", url=HF_TOKEN_URL)
+    return failed(
+        status.detail,
+        remedy="Check the token, or skip it and go without speaker names.",
+        url=HF_TOKEN_URL,
+        action="Set up",
+        skip_action=SKIP_LABEL,
+    )
 
 
 LOCAL_CHECKS = [

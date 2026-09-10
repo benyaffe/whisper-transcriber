@@ -329,31 +329,77 @@ def test_ffmpeg_check_recognises_a_lost_execute_bit(tmp_path, monkeypatch):
 
 
 def test_huggingface_check_reports_a_missing_token(monkeypatch):
+    from src.core.diarization import TokenStatus
     from src.podcastnotes import checks_local
 
+    monkeypatch.setattr("src.core.config.is_speaker_id_enabled", lambda: True)
     monkeypatch.setattr("src.core.config.get_hf_token", lambda: "")
-
-    result = checks_local.check_huggingface()
-
-    assert result.state is State.FAILED
-    assert "huggingface.co" in result.url
-    assert "free" in result.remedy.lower()
-
-
-def test_huggingface_check_reports_a_rejected_token(monkeypatch):
-    """A saved token that has been revoked looks fine until something calls."""
-    from src.podcastnotes import checks_local
-
-    monkeypatch.setattr("src.core.config.get_hf_token", lambda: "hf_stale")
     monkeypatch.setattr(
-        "src.core.diarization.validate_hf_token",
-        lambda t: (False, "Invalid token - please check and re-enter"),
+        "src.core.diarization.token_status",
+        lambda t: TokenStatus(problem="empty", detail="No token yet."),
     )
 
     result = checks_local.check_huggingface()
 
     assert result.state is State.FAILED
-    assert "Invalid token" in result.detail
+    assert "minute" in result.remedy.lower() or "free" in result.remedy.lower()
+    assert result.skip_action, "there must be a way past it"
+
+
+def test_huggingface_check_reports_a_rejected_token(monkeypatch):
+    """A saved token that has been revoked looks fine until something calls."""
+    from src.core.diarization import TokenStatus
+    from src.podcastnotes import checks_local
+
+    monkeypatch.setattr("src.core.config.is_speaker_id_enabled", lambda: True)
+    monkeypatch.setattr("src.core.config.get_hf_token", lambda: "hf_stale")
+    monkeypatch.setattr(
+        "src.core.diarization.token_status",
+        lambda t: TokenStatus(problem="unauthorized",
+                              detail="HuggingFace does not recognise that token."),
+    )
+
+    result = checks_local.check_huggingface()
+
+    assert result.state is State.FAILED
+    assert "does not recognise" in result.detail
+
+
+def test_huggingface_check_passes_when_speaker_id_is_off(monkeypatch):
+    """Turning it off is a genuine choice, not a failure."""
+    from src.podcastnotes import checks_local
+
+    monkeypatch.setattr("src.core.config.is_speaker_id_enabled", lambda: False)
+
+    result = checks_local.check_huggingface()
+
+    assert result.state is State.OK
+    assert "speaker" in result.detail.lower()
+
+
+def test_huggingface_check_names_the_missing_licences(monkeypatch):
+    """Somebody two clicks in should not have to guess which page is left."""
+    from src.core.diarization import GATED_MODELS, TokenStatus
+    from src.podcastnotes import checks_local
+
+    left = GATED_MODELS[0]
+    monkeypatch.setattr("src.core.config.is_speaker_id_enabled", lambda: True)
+    monkeypatch.setattr("src.core.config.get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(
+        "src.core.diarization.token_status",
+        lambda t: TokenStatus(
+            username="me",
+            problem="licences",
+            missing_licences=[left],
+            detail="1 of 3 licences still to accept.",
+        ),
+    )
+
+    result = checks_local.check_huggingface()
+
+    assert result.state is State.FAILED
+    assert left.name in result.remedy
+    assert result.url == left.url
 
 
 def test_models_check_reports_what_is_missing(monkeypatch):

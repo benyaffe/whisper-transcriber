@@ -309,16 +309,80 @@ def test_fixing_glean_asks_for_the_address_first(qt_app, monkeypatch):
 def test_fixing_a_pasted_value_opens_settings(qt_app):
     """Pasted values live in one place rather than several bespoke dialogs.
 
-    HuggingFace rather than Glean, because Glean now signs in through a
-    browser and is no longer an example of this.
+    Claude's remedy is choosing a project, which is a settings field. Glean
+    and HuggingFace both have their own flows now.
     """
-    view = build(qt_app, [stub("huggingface", failed("no token"))])
+    view = build(qt_app, [stub("claude", failed("no project"))])
     asked = []
     view.settings_requested.connect(lambda: asked.append(True))
     try:
-        view._fix("huggingface")
+        view._fix("claude")
 
         assert asked == [True]
+    finally:
+        view.deleteLater()
+
+
+def test_fixing_huggingface_opens_the_guide_not_a_bare_settings_field(
+    qt_app, monkeypatch
+):
+    """"Paste a token" is where somebody who does not know what HuggingFace
+    is stops dead. The guide walks them through it instead.
+
+    The real handler runs a modal dialog, which blocks the test runner
+    forever, so it is stubbed.
+    """
+    view = build(qt_app, [stub("huggingface", failed("not set up"))])
+    opened, settings = [], []
+    monkeypatch.setattr(view, "_run_huggingface_wizard", lambda: opened.append(True))
+    view.settings_requested.connect(lambda: settings.append(True))
+    try:
+        view._fix("huggingface")
+
+        assert opened == [True]
+        assert settings == []
+    finally:
+        view.deleteLater()
+
+
+def test_skipping_huggingface_is_remembered(qt_app, scoped_settings, monkeypatch):
+    """Closing the row without recording the decision would mean being asked
+    again every launch, which is how a genuine choice turns into nagging."""
+    from src.core.config import is_speaker_id_enabled, set_speaker_id_enabled
+
+    set_speaker_id_enabled(True)
+    view = build(qt_app, [stub("huggingface", failed("not set up"))])
+    monkeypatch.setattr(view, "start_checks", lambda only=None: None)
+    try:
+        view._skip("huggingface")
+
+        assert is_speaker_id_enabled() is False
+    finally:
+        view.deleteLater()
+
+
+def test_a_skip_button_appears_only_where_going_without_is_a_real_choice(qt_app):
+    """Offering to skip something the app cannot work without would be a lie."""
+    view = build(qt_app, [
+        stub("huggingface", failed("not set up", skip_action="Skip this")),
+        stub("google", failed("signed out")),
+    ])
+    try:
+        assert not view.rows["huggingface"].skip_button.isHidden()
+        assert view.rows["huggingface"].skip_button.text() == "Skip this"
+        assert view.rows["google"].skip_button.isHidden()
+    finally:
+        view.deleteLater()
+
+
+def test_the_skip_button_goes_away_once_the_row_passes(qt_app):
+    view = build(qt_app, [
+        stub("huggingface", failed("not set up", skip_action="Skip this")),
+    ])
+    try:
+        view.rows["huggingface"].show_result(ok("Signed in"))
+
+        assert view.rows["huggingface"].skip_button.isHidden()
     finally:
         view.deleteLater()
 

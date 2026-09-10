@@ -94,6 +94,7 @@ class CheckRow(QFrame):
     """One thing that has to work, and what to do when it does not."""
 
     fix_requested = pyqtSignal(str)
+    skip_requested = pyqtSignal(str)
 
     def __init__(self, check, parent=None):
         super().__init__(parent)
@@ -132,6 +133,11 @@ class CheckRow(QFrame):
         self.link_button = QPushButton("Open page")
         self.link_button.clicked.connect(self._open_link)
         buttons.addWidget(self.link_button)
+        self.skip_button = QPushButton()
+        self.skip_button.clicked.connect(
+            lambda: self.skip_requested.emit(self.check.key)
+        )
+        buttons.addWidget(self.skip_button)
         buttons.addStretch()
         layout.addLayout(buttons)
 
@@ -166,6 +172,12 @@ class CheckRow(QFrame):
         # else's to fix. A button that does nothing is worse than no button.
         self.fix_button.setVisible(
             result.state is State.FAILED and self.check.fixable and result.fixable
+        )
+        # Only where going without is a real choice. Offering to skip
+        # something the app cannot work without would be a lie.
+        self.skip_button.setText(result.skip_action)
+        self.skip_button.setVisible(
+            result.state is State.FAILED and bool(result.skip_action)
         )
 
 
@@ -208,6 +220,7 @@ class SetupView(QWidget):
         for check in self.readiness.checks:
             row = CheckRow(check)
             row.fix_requested.connect(self._fix)
+            row.skip_requested.connect(self._skip)
             self.rows[check.key] = row
             rows.addWidget(row)
         rows.addStretch()
@@ -284,15 +297,38 @@ class SetupView(QWidget):
 
     # --- fixing ----------------------------------------------------------------
 
+    def _skip(self, key: str):
+        """Record a decision to go without something optional.
+
+        Only HuggingFace is optional, and skipping it has to be remembered.
+        Simply closing the row would mean being asked again every launch,
+        which is how a genuine choice turns into nagging.
+        """
+        if key == "huggingface":
+            from src.core.config import set_speaker_id_enabled
+
+            set_speaker_id_enabled(False)
+            self.start_checks(only=["huggingface"])
+
     def _fix(self, key: str):
         if key == "google":
             self._sign_in("google")
         elif key == "glean" and self._glean_can_sign_in():
             self._sign_in("glean")
+        elif key == "huggingface":
+            self._run_huggingface_wizard()
         else:
             # Everything else is a value somebody pastes, and those all live in
             # one place rather than in several bespoke dialogs.
             self.settings_requested.emit()
+
+    def _run_huggingface_wizard(self):
+        """Split out so tests can drive the decision without a modal dialog,
+        which otherwise blocks the test runner indefinitely."""
+        from src.ui.podcastnotes.huggingface_wizard import HuggingFaceWizard
+
+        HuggingFaceWizard(self).exec()
+        self.start_checks(only=["huggingface"])
 
     def _glean_can_sign_in(self) -> bool:
         """Whether a browser sign-in is possible, or a token must be pasted.

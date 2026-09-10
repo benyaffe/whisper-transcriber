@@ -369,6 +369,88 @@ def _ensure_models_downloaded(token: str, log: Callable[[str], None]):
     log("[Speaker ID: All models downloaded]")
 
 
+@dataclass
+class TokenStatus:
+    """What is actually wrong with a HuggingFace token, in parts.
+
+    validate_hf_token returns a sentence, which is right for a log line and
+    useless for a screen that wants to tick off three licences one at a time.
+    Both read the same checks; this one keeps the pieces.
+    """
+
+    valid: bool = False
+    username: str = ""
+    # One of: "", "empty", "malformed", "unauthorized", "licences", "denied",
+    # "error". Named so a caller can branch without matching on prose.
+    problem: str = ""
+    missing_licences: list = field(default_factory=list)
+    detail: str = ""
+
+    @property
+    def signed_in(self) -> bool:
+        """The token itself works, whatever else is outstanding."""
+        return bool(self.username)
+
+
+def token_status(token: str) -> TokenStatus:
+    """Check a token and report each part separately."""
+    if not token or not token.strip():
+        return TokenStatus(problem="empty", detail="No token yet.")
+
+    token = token.strip()
+    if not token.startswith("hf_"):
+        return TokenStatus(
+            problem="malformed",
+            detail="A HuggingFace token starts with 'hf_'. That looks like "
+                   "something else.",
+        )
+
+    try:
+        from huggingface_hub import HfApi, list_repo_files
+        from huggingface_hub.utils import GatedRepoError
+    except ImportError:
+        return TokenStatus(problem="error", detail="huggingface_hub is missing.")
+
+    try:
+        username = HfApi(token=token).whoami().get("name", "")
+    except Exception as e:
+        text = str(e).lower()
+        if "401" in text or "unauthorized" in text:
+            return TokenStatus(
+                problem="unauthorized",
+                detail="HuggingFace does not recognise that token.",
+            )
+        return TokenStatus(problem="error", detail=str(e)[:120])
+
+    missing, denied = [], []
+    for model in GATED_MODELS:
+        try:
+            list_repo_files(model.repo, token=token)
+        except GatedRepoError:
+            missing.append(model)
+        except Exception as e:
+            text = str(e).lower()
+            if "403" in text or "401" in text or "gated" in text:
+                missing.append(model)
+            else:
+                denied.append(model)
+
+    if missing:
+        return TokenStatus(
+            username=username,
+            problem="licences",
+            missing_licences=missing,
+            detail=f"{len(missing)} of {len(GATED_MODELS)} licences still to accept.",
+        )
+    if denied:
+        return TokenStatus(
+            username=username,
+            problem="denied",
+            detail="The token needs read permission for gated repositories.",
+        )
+    return TokenStatus(valid=True, username=username, detail="All licences accepted.")
+
+
 def validate_hf_token(token: str) -> tuple[bool, str]:
     """
     Validate HuggingFace token can access ALL required pyannote models.

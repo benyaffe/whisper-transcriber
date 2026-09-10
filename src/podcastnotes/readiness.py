@@ -75,6 +75,11 @@ class Result:
     # than on the Check because one check's button changes with the failure:
     # Glean needs an address before it can offer a sign-in.
     action: str = "Fix"
+    # An offer to go without the thing entirely, when that is a real choice.
+    # Empty means there is no such option, which is the usual case: most of
+    # this list is not optional and pretending otherwise would be worse than
+    # a red tick.
+    skip_action: str = ""
 
     @property
     def ok(self) -> bool:
@@ -91,6 +96,7 @@ def failed(
     url: str = "",
     fixable: bool = True,
     action: str = "Fix",
+    skip_action: str = "",
 ) -> Result:
     return Result(
         State.FAILED,
@@ -99,6 +105,7 @@ def failed(
         url=url,
         fixable=fixable,
         action=action,
+        skip_action=skip_action,
     )
 
 
