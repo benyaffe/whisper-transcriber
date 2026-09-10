@@ -30,10 +30,10 @@ cost centers. That is the whole design.
      even though `cloud-platform` is a sensitive scope. Choosing External
      instead means a review that takes weeks.
    - App name: PodcastNotesWT
-3. **Scopes** — add exactly these two:
-   - `https://www.googleapis.com/auth/cloud-platform` — calling Claude on the
-     user's own Vertex project
-   - `https://www.googleapis.com/auth/drive.file` — creating the finished
+3. **Scopes.** Add exactly these two.
+   - `https://www.googleapis.com/auth/cloud-platform` lets the app call Claude
+     on the user's own Vertex project.
+   - `https://www.googleapis.com/auth/drive.file` lets it create the finished
      document. This is the narrow Drive scope: it grants access only to files
      the app itself created, not to anything else in anyone's Drive.
 4. **Credentials → Create credentials → OAuth client ID**
@@ -46,7 +46,7 @@ Save it as `resources/google_oauth_client.json` in the app bundle, or set
 `PODCASTNOTES_GOOGLE_CLIENT_FILE` to its path.
 
 The JSON contains a "client secret". For an installed application Google does
-not treat this as confidential — it ships inside every desktop app that does
+not treat this as confidential. It ships inside every desktop app that does
 browser sign-in, and the security comes from the loopback redirect rather than
 from the secret. Shipping it in the bundle is the documented arrangement, not
 a shortcut.
@@ -55,19 +55,20 @@ a shortcut.
 
 ## 2. Glean access
 
-Each colleague needs their own Glean credential. **Not a shared one.** Glean's
-API is permission-aware, so a user's own credential returns only what that user
-is allowed to see. A single shared token would let one person's trip surface
-documents another person cannot open, and those names would then be published
-into a shared Google Doc.
+Each colleague needs their own Glean credential, and it must not be a shared
+one. Glean's API is permission-aware, so a user's own credential returns only
+what that user is allowed to see. A single shared token would let one person's
+trip surface documents another person cannot open, and those names would then
+be published into a shared Google Doc.
 
-Two options, in order of preference:
+There are two options, in order of preference.
 
-1. **A Glean OAuth application for the organisation**, so colleagues sign in
-   rather than pasting anything. This is the better end state.
+1. **A Glean OAuth application for the organisation** lets colleagues sign in
+   rather than paste anything. This is the better end state.
 2. **Personal API tokens.** Each colleague creates their own at
    `https://app.glean.com/admin/platform/tokenManagement` and pastes it into
-   Settings. Works today, same permission scoping, just less pleasant.
+   Settings. This works today and has the same permission scoping, but it is
+   less pleasant to set up.
 
 The app supports option 2 now and is structured so option 1 drops in without
 changing anything else.
@@ -80,11 +81,11 @@ Nothing here needs admin help, and the app's setup screen walks through it.
 
 | Step | Where | Notes |
 |---|---|---|
-| Sign in with Google | Setup screen, one button | Opens their browser |
-| Choose their Cloud project | Settings, dropdown | Theirs, not yours. This is what their Claude usage bills to. |
+| Sign in with Google | Setup screen, one button | It opens their browser. |
+| Choose their Cloud project | Settings, dropdown | The project is theirs, not yours. It is what their Claude usage bills to. |
 | Enable Claude in that project | One click, once | The app deep-links to the right page for *their* project. See below. |
-| Paste a Glean token | Settings | Until Glean OAuth exists |
-| Paste a HuggingFace token | Settings | Free account, three model licences to accept |
+| Paste a Glean token | Settings | This step is needed until Glean OAuth exists. |
+| Paste a HuggingFace token | Settings | They need a free account, and they must accept three model licences. |
 
 ### The one manual step that cannot be automated
 
