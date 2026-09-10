@@ -71,6 +71,26 @@ class QualityMetrics:
     repetition_score: float
 
 
+def detect_diarization_device() -> str:
+    """Which device pyannote will pick, which is not the one Whisper uses.
+
+    detect_optimal_settings() reports "cpu" on Apple Silicon because
+    faster-whisper runs int8 on CPU there, while run_diarization independently
+    moves the pipeline to MPS. Mirrors the selection in
+    src/core/diarization.py so the two cannot drift.
+    """
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 def detect_optimal_settings() -> tuple[str, str, str]:
     """
     Auto-detect hardware and return optimal device/compute settings.
@@ -133,11 +153,26 @@ class TranscriptionWorker(QThread):
     # Watchdog: timeout if no progress for this many seconds
     SEGMENT_TIMEOUT = 300  # 5 minutes
 
-    # When speaker ID is going to run, transcription only owns the bar up to
-    # here and diarization owns the rest. Diarization on a long recording can
-    # take as long as transcription, and the old 95-to-100 allocation gave it
-    # five integer steps of a 0-100 QProgressBar, which reads as frozen.
-    TRANSCRIBE_CEILING_WITH_DIARIZATION = 70.0
+    # When speaker ID is going to run, transcription owns the bar up to a
+    # ceiling and diarization owns the rest. The old code emitted a single
+    # progress.emit(95, -1), giving a phase that runs for minutes five integer
+    # steps of a 0-100 QProgressBar, which reads as frozen.
+    #
+    # The ceiling cannot be a constant. Both phases scale linearly with audio
+    # duration, so their ratio is a property of the model and the hardware, not
+    # of the file: measured on Apple Silicon, transcription runs at ~0.34x
+    # realtime and diarization at ~0.04x, but without MPS diarization falls back
+    # to CPU and takes a far larger share. So predict both and divide.
+    #
+    # These factors only apportion the progress bar and never affect output,
+    # so being roughly right is sufficient.
+    DIARIZATION_REALTIME_FACTOR = {"mps": 0.045, "cuda": 0.045, "cpu": 0.15}
+    MIN_TRANSCRIBE_CEILING = 55.0
+    MAX_TRANSCRIBE_CEILING = 92.0
+    DEFAULT_TRANSCRIBE_CEILING = 80.0  # until the first throughput measurement lands
+
+    # Transcribe this much audio before trusting a throughput measurement.
+    CEILING_ESTIMATE_AFTER_AUDIO_S = 20.0
 
     def __init__(self, filepath: str, initial_model: str = "medium", language: Optional[str] = None):
         super().__init__()
@@ -151,6 +186,7 @@ class TranscriptionWorker(QThread):
         self.audio_path: Optional[str] = None
         self._temp_audio = False
         self._will_diarize = False
+        self._progress_ceiling = self.DEFAULT_TRANSCRIBE_CEILING
 
     def run(self):
         try:
@@ -174,11 +210,14 @@ class TranscriptionWorker(QThread):
         self._speaker_id_used = False
 
         # Decide up front whether speaker ID will run, so the progress bar can
-        # reserve room for it rather than discovering it at 95%.
+        # reserve room for it rather than discovering it at 95%. How much room
+        # is refined once from measured throughput, below.
         self._will_diarize, _, _ = self._diarization_preflight()
-        progress_ceiling = (
-            self.TRANSCRIBE_CEILING_WITH_DIARIZATION if self._will_diarize else 100.0
+        self._progress_ceiling = (
+            self.DEFAULT_TRANSCRIBE_CEILING if self._will_diarize else 100.0
         )
+        ceiling_measured = not self._will_diarize
+        diarization_device = detect_diarization_device() if self._will_diarize else "cpu"
 
         # Step 1: Hardware detection
         device, compute_type, hw_desc = detect_optimal_settings()
@@ -260,9 +299,28 @@ class TranscriptionWorker(QThread):
             self.segments.append(trans_seg)
             self.segment_ready.emit(segment.start, segment.end, segment.text.strip(), "")
 
+            # Once enough audio has gone through to trust the throughput
+            # figure, size the speaker-ID share of the bar and freeze it. Doing
+            # this once rather than continuously is what keeps the bar
+            # monotonic; it lands within the first few percent, so the step is
+            # under a percentage point.
+            if not ceiling_measured and segment.end >= self.CEILING_ESTIMATE_AFTER_AUDIO_S:
+                ceiling_measured = True
+                self._progress_ceiling = self._estimate_progress_ceiling(
+                    audio_duration=total_duration,
+                    elapsed=time.time() - start_time,
+                    audio_done=segment.end,
+                    device=diarization_device,
+                )
+                self._logger.info(
+                    f"Progress split: transcription 0-{self._progress_ceiling:.0f}%, "
+                    f"speaker ID {self._progress_ceiling:.0f}-100% "
+                    f"(diarization device={diarization_device})"
+                )
+
             # Progress
             if total_duration > 0:
-                percent = (segment.end / total_duration) * progress_ceiling
+                percent = (segment.end / total_duration) * self._progress_ceiling
                 elapsed = time.time() - start_time
                 if segment.end > 0:
                     rate = elapsed / segment.end
@@ -306,7 +364,7 @@ class TranscriptionWorker(QThread):
             return
         if self._will_diarize:
             self.diarization_progress.emit(
-                self.TRANSCRIBE_CEILING_WITH_DIARIZATION, "Loading speaker model"
+                self._progress_ceiling, "Loading speaker model"
             )
         self._run_diarization()
 
@@ -338,6 +396,33 @@ class TranscriptionWorker(QThread):
         self._temp_audio = True
         return dst
 
+    @classmethod
+    def _estimate_progress_ceiling(
+        cls, audio_duration: float, elapsed: float, audio_done: float, device: str
+    ) -> float:
+        """Where transcription should stop so speaker ID gets a fair share of the bar.
+
+        Extrapolates total transcription time from throughput so far, predicts
+        diarization time from the device's realtime factor, and splits the bar
+        in proportion. Returns a percentage, clamped so neither phase can be
+        squeezed into nothing by a wild measurement.
+        """
+        if audio_duration <= 0 or audio_done <= 0 or elapsed <= 0:
+            return cls.DEFAULT_TRANSCRIBE_CEILING
+
+        predicted_transcribe = (elapsed / audio_done) * audio_duration
+        factor = cls.DIARIZATION_REALTIME_FACTOR.get(
+            device, cls.DIARIZATION_REALTIME_FACTOR["cpu"]
+        )
+        predicted_diarize = factor * audio_duration
+
+        total = predicted_transcribe + predicted_diarize
+        if total <= 0:
+            return cls.DEFAULT_TRANSCRIBE_CEILING
+
+        ceiling = 100.0 * predicted_transcribe / total
+        return min(max(ceiling, cls.MIN_TRANSCRIBE_CEILING), cls.MAX_TRANSCRIBE_CEILING)
+
     def _diarization_preflight(self) -> tuple[bool, str, str]:
         """Decide whether diarization will run, before transcription starts.
 
@@ -368,10 +453,11 @@ class TranscriptionWorker(QThread):
             self.status_message.emit(msg)
 
         # Map the hook's 0.0-1.0 onto the slice of the bar we reserved.
-        span = 100.0 - self.TRANSCRIBE_CEILING_WITH_DIARIZATION
+        floor = self._progress_ceiling
+        span = 100.0 - floor
 
         def progress_cb(fraction: float, stage_label: str):
-            percent = self.TRANSCRIBE_CEILING_WITH_DIARIZATION + fraction * span
+            percent = floor + fraction * span
             self.diarization_progress.emit(percent, stage_label)
 
         try:

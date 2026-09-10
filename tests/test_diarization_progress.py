@@ -317,34 +317,123 @@ def test_diarization_preflight(monkeypatch, enabled, token, expected_run, expect
 
 
 def test_hook_fraction_maps_onto_the_reserved_slice_of_the_bar():
-    """0.0-1.0 from the hook must land in the band the transcriber reserved.
-
-    Mirrors the arithmetic in TranscriptionWorker._run_diarization without
-    constructing a QThread, following the __new__ idiom used elsewhere in
-    the suite for QThread methods.
-    """
-    from src.core.transcriber import TranscriptionWorker
-
-    floor = TranscriptionWorker.TRANSCRIBE_CEILING_WITH_DIARIZATION
+    """0.0-1.0 from the hook must span exactly ceiling..100, whatever the ceiling."""
+    floor = 88.0
     span = 100.0 - floor
 
-    assert floor + 0.0 * span == pytest.approx(70.0)
-    assert floor + 0.5 * span == pytest.approx(85.0)
+    assert floor + 0.0 * span == pytest.approx(88.0)
+    assert floor + 0.5 * span == pytest.approx(94.0)
     assert floor + 1.0 * span == pytest.approx(100.0)
 
 
-def test_diarization_owns_a_usable_share_of_the_progress_bar():
-    """Regression guard on the fix itself.
+# Measured end to end on real recordings. Both phases scale linearly with audio
+# duration, so these fix the model: if the predicted ceiling drifts away from
+# what actually happened, the realtime factors need revisiting.
+#
+#   name, audio_s, transcription_s, observed_diarization_s
+REAL_RUNS = [
+    ("Lakeside StBede", 756.0, 274.0, 35.0),
+    ("Lakeside WP", 1244.0, 413.0, 47.0),
+]
 
-    The old code emitted a single progress.emit(95, -1), leaving diarization
-    five integer steps of a 0-100 QProgressBar for a phase that can run for
-    many minutes. Whatever the ceiling becomes, it has to leave enough room
-    for the bar to visibly move.
+
+@pytest.mark.parametrize("name, audio_s, transcribe_s, diarize_s", REAL_RUNS)
+def test_predicted_split_matches_measured_runs(name, audio_s, transcribe_s, diarize_s):
+    """The model has to reproduce the runs it was derived from, within a point."""
+    from src.core.transcriber import TranscriptionWorker
+
+    ceiling = TranscriptionWorker._estimate_progress_ceiling(
+        audio_duration=audio_s,
+        elapsed=transcribe_s,
+        audio_done=audio_s,  # measured over the whole run
+        device="mps",
+    )
+    observed_share = 100.0 * diarize_s / (transcribe_s + diarize_s)
+    predicted_share = 100.0 - ceiling
+
+    assert predicted_share == pytest.approx(observed_share, abs=2.0), (
+        f"{name}: predicted {predicted_share:.1f}% for speaker ID, "
+        f"observed {observed_share:.1f}%"
+    )
+
+
+def test_early_measurement_predicts_the_same_split_as_the_full_run():
+    """The estimate is taken ~20s in; extrapolating early must not skew it."""
+    from src.core.transcriber import TranscriptionWorker
+
+    audio_s, transcribe_s = 756.0, 274.0
+    rate = transcribe_s / audio_s
+
+    early = TranscriptionWorker._estimate_progress_ceiling(
+        audio_duration=audio_s, elapsed=20.0 * rate, audio_done=20.0, device="mps"
+    )
+    full = TranscriptionWorker._estimate_progress_ceiling(
+        audio_duration=audio_s, elapsed=transcribe_s, audio_done=audio_s, device="mps"
+    )
+    assert early == pytest.approx(full, abs=0.5)
+
+
+def test_cpu_only_hardware_gets_a_bigger_speaker_id_share():
+    """The whole point of making this adaptive rather than a constant."""
+    from src.core.transcriber import TranscriptionWorker
+
+    kwargs = dict(audio_duration=756.0, elapsed=274.0, audio_done=756.0)
+    mps = TranscriptionWorker._estimate_progress_ceiling(device="mps", **kwargs)
+    cpu = TranscriptionWorker._estimate_progress_ceiling(device="cpu", **kwargs)
+
+    assert cpu < mps, "a slower diarization device must be given more of the bar"
+
+
+def test_unknown_device_falls_back_to_the_pessimistic_factor():
+    from src.core.transcriber import TranscriptionWorker
+
+    kwargs = dict(audio_duration=756.0, elapsed=274.0, audio_done=756.0)
+    assert TranscriptionWorker._estimate_progress_ceiling(
+        device="some-future-npu", **kwargs
+    ) == pytest.approx(
+        TranscriptionWorker._estimate_progress_ceiling(device="cpu", **kwargs)
+    )
+
+
+@pytest.mark.parametrize(
+    "audio_duration, elapsed, audio_done",
+    [(0, 10, 10), (756, 0, 10), (756, 10, 0), (-1, 10, 10)],
+)
+def test_degenerate_measurements_fall_back_to_the_default(audio_duration, elapsed, audio_done):
+    """A zero-length or unmeasured file must not produce a nonsense ceiling."""
+    from src.core.transcriber import TranscriptionWorker
+
+    assert TranscriptionWorker._estimate_progress_ceiling(
+        audio_duration=audio_duration, elapsed=elapsed, audio_done=audio_done, device="mps"
+    ) == TranscriptionWorker.DEFAULT_TRANSCRIBE_CEILING
+
+
+@pytest.mark.parametrize("elapsed", [1.0, 100000.0])  # absurdly fast, absurdly slow
+def test_extreme_throughput_is_clamped(elapsed):
+    """Neither phase may be squeezed out of the bar by a wild measurement."""
+    from src.core.transcriber import TranscriptionWorker
+
+    ceiling = TranscriptionWorker._estimate_progress_ceiling(
+        audio_duration=756.0, elapsed=elapsed, audio_done=756.0, device="cpu"
+    )
+    assert (
+        TranscriptionWorker.MIN_TRANSCRIBE_CEILING
+        <= ceiling
+        <= TranscriptionWorker.MAX_TRANSCRIBE_CEILING
+    )
+
+
+def test_diarization_always_keeps_a_usable_share_of_the_bar():
+    """Regression guard on the original fix.
+
+    The old code emitted a single progress.emit(95, -1), leaving a phase that
+    runs for minutes just five integer steps of a 0-100 QProgressBar. However
+    the ceiling is computed, it must never squeeze speaker ID back to that.
     """
     from src.core.transcriber import TranscriptionWorker
 
-    reserved = 100.0 - TranscriptionWorker.TRANSCRIBE_CEILING_WITH_DIARIZATION
-    assert reserved >= 20.0, f"only {reserved:.0f} integer steps reserved for speaker ID"
+    reserved = 100.0 - TranscriptionWorker.MAX_TRANSCRIBE_CEILING
+    assert reserved >= 8.0, f"only {reserved:.0f} integer steps reserved for speaker ID"
 
 
 def test_run_diarization_still_returns_turns(patched_diarization):
