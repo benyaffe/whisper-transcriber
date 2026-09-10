@@ -32,6 +32,18 @@ REMOTE_TRIPS_DIR = os.path.join(
     os.path.expanduser("~"), "Documents", "PodcastNotesWT"
 )
 
+# How long a trip can be. Speaker identification holds the whole recording in
+# memory at once, so cost grows with length until a laptop starts swapping.
+WARN_MINUTES = 90
+REFUSE_MINUTES = 180
+
+# Measured, not guessed: diarizing the 42-minute Ashford recording peaked at
+# 1750 MB above baseline, which is 41.7 MB per minute. Note that this is an
+# order of magnitude more than the raw audio (a minute of 16kHz mono float32 is
+# under 4 MB) because pyannote's segmentation and embedding tensors dominate.
+# Estimating from the audio size alone understates it about elevenfold.
+DIARIZATION_MB_PER_MINUTE = 42
+
 
 @dataclass
 class SourceRecording:
@@ -77,6 +89,45 @@ class SourceRecording:
     def exists(self) -> bool:
         """A remote source cannot be checked without fetching it."""
         return True if self.remote else os.path.isfile(self.path)
+
+
+def check_duration(total_seconds: float, estimated: bool = False) -> tuple[bool, str]:
+    """Is a trip of this length sensible? Returns (allowed, what to tell them).
+
+    Both thresholds produce a message; only the upper one blocks. An empty
+    message means there is nothing worth saying.
+    """
+    minutes = total_seconds / 60
+    if minutes <= 0:
+        return True, ""
+
+    maybe = "at least " if estimated else ""
+    needs_gb = minutes * DIARIZATION_MB_PER_MINUTE / 1024
+
+    if minutes > REFUSE_MINUTES:
+        return False, (
+            f"That is {maybe}{minutes:.0f} minutes of audio, over the "
+            f"{REFUSE_MINUTES}-minute limit. Working out who is speaking would need "
+            f"around {needs_gb:.0f}GB of memory for a recording this long. Split the "
+            f"trip into shorter ones, or untick Multiple speakers."
+        )
+    if minutes > WARN_MINUTES:
+        return True, (
+            f"That is {maybe}{minutes:.0f} minutes of audio. It will work, but "
+            f"working out who is speaking will need around {needs_gb:.0f}GB of memory "
+            f"and {_free_gb():.0f}GB is free right now."
+        )
+    return True, ""
+
+
+def _free_gb() -> float:
+    """Memory available now. Never raises; a warning is not worth failing over."""
+    try:
+        import psutil
+
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except Exception:
+        return 0.0
 
 
 def slugify(name: str) -> str:
@@ -170,6 +221,15 @@ class TripProject:
     @property
     def total_duration(self) -> float:
         return sum(s.duration for s in self.sources)
+
+    @property
+    def duration_is_estimated(self) -> bool:
+        """True when a source has not been fetched yet, so the total is a floor.
+
+        A URL's length is unknown until it is downloaded, so a trip containing
+        one could turn out longer than it looks.
+        """
+        return any(s.remote for s in self.sources)
 
     # --- integrity ------------------------------------------------------------
 

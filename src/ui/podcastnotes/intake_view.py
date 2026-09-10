@@ -14,7 +14,8 @@ from PyQt6.QtWidgets import (
     QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
-from src.utils.file_utils import is_url, validate_input_file
+from src.podcastnotes.project import check_duration
+from src.utils.file_utils import get_file_info, is_url, validate_input_file
 from src.ui.widgets import DropZone
 
 PLACEHOLDER_DESCRIPTION = (
@@ -120,6 +121,7 @@ class IntakeView(QWidget):
 
         self.speakers_checkbox = QCheckBox("Multiple speakers")
         self.speakers_checkbox.setChecked(True)
+        self.speakers_checkbox.toggled.connect(self._refresh_start_button)
         self.speakers_checkbox.setToolTip(
             "Work out who said what. Turn off for a single-speaker recording; "
             "it is about a tenth of the running time."
@@ -168,6 +170,21 @@ class IntakeView(QWidget):
 
     # --- validation -----------------------------------------------------------
 
+    def _duration(self) -> tuple[float, bool]:
+        """Total length of the recordings, and whether that is only a floor.
+
+        A URL's length is unknown until it has been downloaded, so a trip
+        containing one can turn out longer than it looks here.
+        """
+        total = 0.0
+        estimated = False
+        for source in self.recordings.sources():
+            if is_url(source):
+                estimated = True
+                continue
+            total += float(get_file_info(source).get("duration") or 0.0)
+        return total, estimated
+
     def _problem(self) -> str:
         """Why the trip cannot start yet, or empty if it can."""
         if not self.name_input.text().strip():
@@ -179,7 +196,20 @@ class IntakeView(QWidget):
                 "Working out who is speaking needs a HuggingFace token, which is not "
                 "set up yet. Add one in Settings, or untick Multiple speakers."
             )
+        # Only speaker identification has the memory problem, so a trip that is
+        # not doing it has no reason to be capped.
+        if self.speakers_checkbox.isChecked():
+            allowed, message = check_duration(*self._duration())
+            if not allowed:
+                return message
         return ""
+
+    def _advisory(self) -> str:
+        """Something worth saying that is not a reason to stop."""
+        if not self.recordings.sources() or not self.speakers_checkbox.isChecked():
+            return ""
+        allowed, message = check_duration(*self._duration())
+        return message if allowed else ""
 
     @staticmethod
     def _hf_token() -> str:
@@ -188,11 +218,13 @@ class IntakeView(QWidget):
         return get_hf_token()
 
     def _refresh_start_button(self):
-        problem = self._problem()
         # The button stays enabled with no name or no recordings, because a
         # disabled button with no explanation is the least helpful thing a form
         # can do. Pressing it says what is wrong.
-        self.hint.setText(problem if self.recordings.sources() else "")
+        if not self.recordings.sources():
+            self.hint.setText("")
+            return
+        self.hint.setText(self._problem() or self._advisory())
 
     def _report_problem(self, problem: str):
         """Tell the operator why nothing happened.

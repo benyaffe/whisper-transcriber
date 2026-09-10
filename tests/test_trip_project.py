@@ -272,3 +272,85 @@ def test_project_module_imports_no_qt():
 
     qt = sorted(m for m in imported if m.split(".")[0] in {"PyQt6", "PyQt5", "PySide6"})
     assert qt == [], f"project imports Qt: {qt}"
+
+
+# --- how long a trip may be ---------------------------------------------------
+#
+# Speaker identification holds the whole recording in memory. The cost was
+# measured rather than derived: diarizing the 42-minute Ashford recording peaked
+# at 1750 MB above baseline.
+
+
+from src.podcastnotes.project import (  # noqa: E402
+    DIARIZATION_MB_PER_MINUTE, REFUSE_MINUTES, WARN_MINUTES, check_duration,
+)
+
+
+@pytest.mark.parametrize("minutes", [0, 1, 12, 42, WARN_MINUTES])
+def test_an_ordinary_trip_says_nothing(minutes):
+    allowed, message = check_duration(minutes * 60)
+
+    assert allowed is True
+    assert message == ""
+
+
+def test_a_long_trip_warns_but_still_runs():
+    allowed, message = check_duration((WARN_MINUTES + 5) * 60)
+
+    assert allowed is True
+    assert message != ""
+    assert "GB" in message, "a warning about memory should say how much"
+
+
+def test_a_very_long_trip_is_refused():
+    allowed, message = check_duration((REFUSE_MINUTES + 20) * 60)
+
+    assert allowed is False
+    assert str(REFUSE_MINUTES) in message
+    # Refusing without saying what to do instead is not helpful.
+    assert "Split" in message and "Multiple speakers" in message
+
+
+def test_a_trip_containing_a_url_says_the_length_is_a_floor():
+    """A URL's length is unknown until it has been downloaded."""
+    _, known = check_duration((WARN_MINUTES + 5) * 60, estimated=False)
+    _, guessed = check_duration((WARN_MINUTES + 5) * 60, estimated=True)
+
+    assert "at least" not in known
+    assert "at least" in guessed
+
+
+def test_the_memory_estimate_reflects_what_was_measured():
+    """1750 MB for 42 minutes. Changing this should be a deliberate act.
+
+    The obvious guess, sizing it from the raw audio, gives under 4 MB a minute
+    and understates the real cost about elevenfold.
+    """
+    assert DIARIZATION_MB_PER_MINUTE == pytest.approx(1750 / 42, abs=1.0)
+    assert DIARIZATION_MB_PER_MINUTE > 4 * 5, "this is not just the raw waveform"
+
+
+def test_the_refusal_threshold_is_beyond_a_typical_laptop():
+    """Sanity: the hard limit should correspond to a genuinely large amount."""
+    needed_gb = REFUSE_MINUTES * DIARIZATION_MB_PER_MINUTE / 1024
+
+    assert needed_gb > 6, f"{REFUSE_MINUTES} min only needs {needed_gb:.1f}GB; limit is loose"
+
+
+def test_free_memory_never_raises(monkeypatch):
+    """A warning is not worth failing a trip over."""
+    from src.podcastnotes import project
+
+    monkeypatch.setattr(project, "_free_gb", lambda: 0.0)
+    allowed, message = check_duration((WARN_MINUTES + 5) * 60)
+
+    assert allowed is True
+    assert message
+
+
+def test_a_trip_knows_when_its_length_is_only_a_floor(recordings):
+    local = TripProject.create("Local", recordings)
+    mixed = TripProject.create("Mixed", recordings + ["https://example.com/talk"])
+
+    assert local.duration_is_estimated is False
+    assert mixed.duration_is_estimated is True
