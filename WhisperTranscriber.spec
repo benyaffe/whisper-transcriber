@@ -64,19 +64,10 @@ datas += speechbrain_datas + pyannote_datas + asteroid_datas + torchcodec_datas
 
 # Hidden imports that PyInstaller might miss
 hiddenimports = [
-    'src',
-    'src.ui',
-    'src.ui.main_window',
-    'src.ui.settings_dialog',
-    'src.core',
-    'src.core.transcriber',
-    'src.core.downloader',
-    'src.core.diarization',
-    'src.core.checkpoint',
-    'src.utils',
-    'src.utils.file_utils',
-    'src.utils.error_handler',
-    'src.utils.logger',
+    # First-party modules are discovered rather than hand-listed. The hand-list
+    # had already drifted: src.core.json_export was missing, which would have
+    # shipped a bundle that dies the first time a transcription finishes.
+    *collect_submodules('src'),
     # PyQt6
     'PyQt6.QtCore',
     'PyQt6.QtGui',

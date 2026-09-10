@@ -3,52 +3,20 @@ Settings dialog for Whisper Transcriber.
 Handles speaker identification toggle and HuggingFace token configuration.
 """
 
-import keyring
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QGroupBox, QFormLayout, QMessageBox, QCheckBox
 )
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt
 
-
-KEYRING_SERVICE = "WhisperTranscriber"
-KEYRING_HF_TOKEN = "hf_token"
-SETTINGS_SPEAKER_ID_ENABLED = "speaker_id_enabled"
-
-
-def get_hf_token() -> str:
-    """Retrieve stored HuggingFace token."""
-    try:
-        token = keyring.get_password(KEYRING_SERVICE, KEYRING_HF_TOKEN)
-        return token or ""
-    except Exception:
-        return ""
-
-
-def save_hf_token(token: str):
-    """Save HuggingFace token to keychain."""
-    try:
-        if token:
-            keyring.set_password(KEYRING_SERVICE, KEYRING_HF_TOKEN, token)
-        else:
-            try:
-                keyring.delete_password(KEYRING_SERVICE, KEYRING_HF_TOKEN)
-            except keyring.errors.PasswordDeleteError:
-                pass
-    except Exception as e:
-        raise RuntimeError(f"Failed to save token: {e}")
-
-
-def is_speaker_id_enabled() -> bool:
-    """Check if speaker identification is enabled."""
-    settings = QSettings("WhisperTranscriber", "WhisperTranscriber")
-    return settings.value(SETTINGS_SPEAKER_ID_ENABLED, False, type=bool)
-
-
-def set_speaker_id_enabled(enabled: bool):
-    """Set speaker identification enabled state."""
-    settings = QSettings("WhisperTranscriber", "WhisperTranscriber")
-    settings.setValue(SETTINGS_SPEAKER_ID_ENABLED, enabled)
+# These used to be defined here, which made src/core import src/ui.
+# src/core/config.py is now their only home.
+from src.core.config import (
+    get_hf_token,
+    is_speaker_id_enabled,
+    save_hf_token,
+    set_speaker_id_enabled,
+)
 
 
 class SettingsDialog(QDialog):

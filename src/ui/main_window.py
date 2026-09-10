@@ -206,14 +206,14 @@ class MainWindow(QMainWindow):
 
     def _load_speaker_id_setting(self):
         """Load speaker ID enabled state from settings."""
-        from src.ui.settings_dialog import is_speaker_id_enabled
+        from src.core.config import is_speaker_id_enabled
         self.speaker_id_checkbox.blockSignals(True)
         self.speaker_id_checkbox.setChecked(is_speaker_id_enabled())
         self.speaker_id_checkbox.blockSignals(False)
 
     def _on_speaker_id_toggled(self, state):
         """Handle speaker ID checkbox toggle."""
-        from src.ui.settings_dialog import get_hf_token, set_speaker_id_enabled
+        from src.core.config import get_hf_token, set_speaker_id_enabled
         from PyQt6.QtWidgets import QMessageBox
 
         enabled = state == Qt.CheckState.Checked.value

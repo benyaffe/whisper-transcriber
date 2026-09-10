@@ -13,7 +13,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.utils.file_utils import extract_audio, generate_output_paths, get_file_info
 from src.core.diarization import run_diarization, assign_speakers_to_segments, DiarizationError, TokenValidationError
-from src.ui.settings_dialog import get_hf_token, is_speaker_id_enabled
+from src.core.config import get_hf_token, is_speaker_id_enabled
 from src.utils.logger import get_logger, log_exception
 
 

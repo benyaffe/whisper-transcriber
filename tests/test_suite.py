@@ -212,13 +212,13 @@ class TestSettings:
         settings = QSettings("WhisperTranscriber", "TestSettings")
         settings.clear()
 
-        from src.ui.settings_dialog import is_speaker_id_enabled
+        from src.core.config import is_speaker_id_enabled
         # With cleared settings, should default to False
         assert is_speaker_id_enabled() == False or True  # May be True if previously set
 
     def test_toggle_speaker_id(self):
         """Should persist speaker ID toggle state."""
-        from src.ui.settings_dialog import set_speaker_id_enabled, is_speaker_id_enabled
+        from src.core.config import set_speaker_id_enabled, is_speaker_id_enabled
 
         original = is_speaker_id_enabled()
 
