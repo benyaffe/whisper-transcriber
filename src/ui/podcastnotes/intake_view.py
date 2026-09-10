@@ -141,6 +141,19 @@ class IntakeView(QWidget):
 
     # --- adding recordings ----------------------------------------------------
 
+    def has_input(self) -> bool:
+        """Whether somebody has started describing a trip.
+
+        The setup checklist uses this to decide whether it may take the screen:
+        interrupting an empty form is helpful, interrupting a half-written one
+        is not.
+        """
+        return bool(
+            self.name_input.text().strip()
+            or self.description_input.toPlainText().strip()
+            or self.recordings.sources()
+        )
+
     def add_sources(self, paths: list):
         """Add local files, rejecting anything that is not usable audio."""
         rejected = []

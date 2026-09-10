@@ -15,8 +15,10 @@ from PyQt6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
 from src.core.config import get_hf_token
 from src.podcastnotes.project import TripProject
+from src.podcastnotes.readiness import remember_working, was_working_last_time
 from src.ui.podcastnotes.intake_view import IntakeView
 from src.ui.podcastnotes.run_view import RunView
+from src.ui.podcastnotes.setup_view import SetupView
 from src.ui.podcastnotes.trip_worker import TripWorker
 from src.utils.file_utils import check_ffmpeg_health
 from src.utils.logger import get_logger
@@ -39,6 +41,10 @@ class MainWindow(QMainWindow):
         self._stall_timer = None
         self._stall_warned = False
 
+        self.setup_view = SetupView()
+        self.setup_view.ready.connect(self._show_intake)
+        self.setup_view.settings_requested.connect(self._open_settings)
+
         self.intake = IntakeView()
         self.intake.start_requested.connect(self._start_trip)
         self.intake.settings_requested.connect(self._open_settings)
@@ -48,8 +54,14 @@ class MainWindow(QMainWindow):
         self.run_view.new_trip_requested.connect(self._show_intake)
 
         self.stack = QStackedWidget()
+        self.stack.addWidget(self.setup_view)
         self.stack.addWidget(self.intake)
         self.stack.addWidget(self.run_view)
+        # Stated rather than left to insertion order. Whether the checklist
+        # takes the screen is check_setup_on_launch's decision and nothing
+        # else's, and a stack that quietly defaults to it would make that
+        # policy depend on which line addWidget was called on.
+        self.stack.setCurrentWidget(self.intake)
         self.setCentralWidget(self.stack)
 
         self._setup_menu()
@@ -59,6 +71,49 @@ class MainWindow(QMainWindow):
         settings_action = app_menu.addAction("Settings...")
         settings_action.setShortcut("Cmd+,")
         settings_action.triggered.connect(self._open_settings)
+        setup_action = app_menu.addAction("Setup...")
+        setup_action.triggered.connect(self.show_setup)
+
+    def show_setup(self):
+        """Open the checklist and run it.
+
+        Reachable from the menu at any time, not only when something has
+        already broken, because "is this thing working?" is a fair question to
+        ask before starting a forty-minute trip rather than after.
+        """
+        self.stack.setCurrentWidget(self.setup_view)
+        self.setup_view.start_checks()
+
+    def check_setup_on_launch(self):
+        """Decide what to open on, then verify in the background.
+
+        Three cases, and they want different things. Somebody who has never
+        had this working should land on the list. Somebody whose setup was
+        fine last time should land on the trip form and not have to dismiss a
+        checklist every morning. Somebody whose token expired overnight looks
+        identical to the second case until the checks come back, so the app
+        opens on the form and moves them to the list only if something has
+        actually broken.
+
+        The interruption is therefore only ever paid by the person who needs
+        it, which is the whole point.
+        """
+        if not was_working_last_time():
+            self.show_setup()
+            return
+
+        self.stack.setCurrentWidget(self.intake)
+        self.setup_view.all_done.connect(self._on_launch_checks_done)
+        self.setup_view.start_checks()
+
+    def _on_launch_checks_done(self, everything_works: bool):
+        remember_working(everything_works)
+        if everything_works:
+            return
+        # Do not yank the screen out from under somebody who has already
+        # started describing a trip.
+        if self.stack.currentWidget() is self.intake and not self.intake.has_input():
+            self.stack.setCurrentWidget(self.setup_view)
 
     def _open_settings(self):
         from src.ui.settings_dialog import SettingsDialog

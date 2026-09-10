@@ -182,6 +182,52 @@ def test_first_problem_is_none_when_everything_works():
     assert Readiness.first_problem(readiness.run()) is None
 
 
+# --- reporting progress -------------------------------------------------------
+
+
+def test_each_check_reports_before_and_after_it_runs():
+    """Several of these are network calls. A list that sits blank for ten
+    seconds and then fills in at once looks broken while it is working."""
+    events = []
+    readiness = Readiness([check("a", ok("fine")), check("b", failed("no"))])
+
+    readiness.run(
+        on_start=lambda key: events.append(("start", key)),
+        on_result=lambda key, result: events.append(("result", key, result.state)),
+    )
+
+    assert events == [
+        ("start", "a"),
+        ("result", "a", State.OK),
+        ("start", "b"),
+        ("result", "b", State.FAILED),
+    ]
+
+
+def test_a_blocked_check_is_reported_without_being_started():
+    """It never runs, so announcing that it is being checked would be a lie,
+    but the row still has to stop saying "checking"."""
+    events = []
+    readiness = Readiness([
+        check("google", failed("signed out")),
+        check("drive", ok(), requires=["google"]),
+    ])
+
+    readiness.run(
+        on_start=lambda key: events.append(("start", key)),
+        on_result=lambda key, result: events.append(("result", key, result.state)),
+    )
+
+    assert ("start", "drive") not in events
+    assert ("result", "drive", State.BLOCKED) in events
+
+
+def test_progress_reporting_is_optional():
+    readiness = Readiness([check("a", ok())])
+
+    assert readiness.run()["a"].state is State.OK  # no callbacks, no crash
+
+
 # --- a check that goes wrong --------------------------------------------------
 
 

@@ -39,16 +39,14 @@ class NotConfigured(Exception):
 
 
 def instance() -> str:
-    """The organisation's Glean instance.
+    """The organisation's Glean instance, already canonical.
 
-    Accepts either the bare name or a pasted URL, because people will paste
-    whatever is in their address bar and being strict about it just produces a
-    setup step that fails for a reason nobody can see.
+    set_instance does the tidying, so what is stored is what is returned.
+    Normalising on both sides would leave one of the two never exercised.
     """
     from src.core.config import _settings
 
-    raw = (_settings().value(SETTINGS_GLEAN_INSTANCE, "", type=str) or "").strip()
-    return _normalise_instance(raw)
+    return (_settings().value(SETTINGS_GLEAN_INSTANCE, "", type=str) or "").strip()
 
 
 def _normalise_instance(raw: str) -> str:
@@ -69,6 +67,12 @@ def _normalise_instance(raw: str) -> str:
 
 
 def set_instance(value: str):
+    """Store the instance, tidied.
+
+    People paste whatever is in their address bar. Being strict about it would
+    produce a setup step that fails for a reason nobody can see, on the one
+    screen whose entire job is explaining failures.
+    """
     from src.core.config import _settings
 
     _settings().setValue(SETTINGS_GLEAN_INSTANCE, _normalise_instance(value))
@@ -86,9 +90,14 @@ def get_token() -> str:
 def save_token(token: str):
     import keyring
 
+    # Normalised before the decision, not after. Branching on the raw value and
+    # stripping inside meant a field holding only spaces stored an empty string
+    # rather than removing the entry, so "no token" and "a token that is the
+    # empty string" became two different states with one meaning.
+    token = (token or "").strip()
     try:
         if token:
-            keyring.set_password(KEYRING_SERVICE, KEYRING_GLEAN_TOKEN, token.strip())
+            keyring.set_password(KEYRING_SERVICE, KEYRING_GLEAN_TOKEN, token)
         else:
             try:
                 keyring.delete_password(KEYRING_SERVICE, KEYRING_GLEAN_TOKEN)

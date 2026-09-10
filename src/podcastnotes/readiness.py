@@ -22,6 +22,27 @@ from enum import Enum
 from typing import Callable, Optional
 
 
+SETTINGS_LAST_ALL_OK = "setup_last_all_ok"
+
+
+def was_working_last_time() -> bool:
+    """Whether the checks were all green when they last ran.
+
+    Used only to decide which screen to open on. Never used to skip a check:
+    the whole premise here is that a credential which worked yesterday tells
+    you nothing about today.
+    """
+    from src.core.config import _settings
+
+    return _settings().value(SETTINGS_LAST_ALL_OK, False, type=bool)
+
+
+def remember_working(value: bool):
+    from src.core.config import _settings
+
+    _settings().setValue(SETTINGS_LAST_ALL_OK, bool(value))
+
+
 class State(Enum):
     OK = "ok"
     FAILED = "failed"
@@ -102,6 +123,8 @@ class Readiness:
         self,
         only: Optional[list[str]] = None,
         known: Optional[dict[str, Result]] = None,
+        on_start: Optional[Callable[[str], None]] = None,
+        on_result: Optional[Callable[[str, Result], None]] = None,
     ) -> dict[str, Result]:
         """Run every check, in order, skipping those whose requirements failed.
 
@@ -110,6 +133,10 @@ class Readiness:
         subset re-check can still see that a requirement is failing. Without it,
         re-checking Drive on its own while Google is signed out would make a
         doomed call and report a second, more confusing error.
+
+        `on_start` and `on_result` fire per check so a caller can show progress.
+        Several of these make network calls, and a list that sits blank for ten
+        seconds and then fills in at once looks broken while it is working.
 
         Returns the merged dict, so the caller can hold one set of results.
         """
@@ -124,8 +151,14 @@ class Readiness:
             ]
             if unmet:
                 results[check.key] = blocked(f"Waiting on {unmet[0]}")
+                if on_result:
+                    on_result(check.key, results[check.key])
                 continue
+            if on_start:
+                on_start(check.key)
             results[check.key] = check()
+            if on_result:
+                on_result(check.key, results[check.key])
         return results
 
     @staticmethod

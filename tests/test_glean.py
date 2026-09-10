@@ -46,6 +46,18 @@ def test_an_empty_address_stays_empty():
     assert glean._normalise_instance("   ") == ""
 
 
+def test_what_is_stored_is_already_canonical(scoped_settings):
+    """Tidying happens once, on the way in.
+
+    Doing it on the way out as well would leave one of the two never
+    exercised, and the stored setting would hold whatever was pasted.
+    """
+    glean.set_instance("https://acme.glean.com/search?q=hi")
+
+    assert scoped_settings.value(glean.SETTINGS_GLEAN_INSTANCE) == "acme"
+    assert glean.instance() == "acme"
+
+
 # --- the credential is per person ---------------------------------------------
 
 
@@ -71,6 +83,23 @@ def test_the_token_is_read_at_request_time_not_captured(monkeypatch):
     assert callable(seen["api_token"]), "the token should be resolved lazily"
     assert seen["api_token"]() == "glean-token-1"
     assert seen["instance"] == "acme"
+
+
+def test_a_field_containing_only_spaces_clears_the_token(monkeypatch):
+    """"No token" and "a token that is the empty string" mean the same thing
+    and must not be two different stored states."""
+    store = {}
+    import keyring
+
+    monkeypatch.setattr(keyring, "get_password", lambda s, k: store.get((s, k)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, k, v: store.__setitem__((s, k), v))
+    monkeypatch.setattr(keyring, "delete_password", lambda s, k: store.pop((s, k), None))
+
+    glean.save_token("real-token")
+    glean.save_token("   ")
+
+    assert store == {}, "a blank field left an entry behind"
+    assert glean.get_token() == ""
 
 
 def test_the_token_lives_in_the_same_keychain_service_as_the_others():

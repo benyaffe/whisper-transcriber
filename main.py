@@ -124,6 +124,11 @@ def main():
     app.main_window = window  # For Cmd+Tab window raising
     window.show()
 
+    # Verify the connections in the background. Opens on the checklist if this
+    # machine has never had them all working, and switches to it later only if
+    # something has broken since.
+    window.check_setup_on_launch()
+
     # Files passed on the command line, which is how macOS delivers a drag
     # onto the app icon at launch. They become the recordings of a new trip.
     if files_to_process:
