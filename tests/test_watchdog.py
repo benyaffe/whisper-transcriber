@@ -203,7 +203,9 @@ def test_speaker_id_is_driven_by_arguments_not_saved_settings(monkeypatch):
 # the GUI event loop, which keeps running when the worker thread does not.
 
 
-class _FakeWorker:
+class _StalledWorker:
+    """Stands in for a TripWorker that has gone quiet."""
+
     def __init__(self, quiet_for, running=True):
         self._quiet = quiet_for
         self._running = running
@@ -221,15 +223,19 @@ def make_window(qt_app):
     return MainWindow()
 
 
+def shown_text(window):
+    return window.run_view.transcript.toPlainText()
+
+
 def test_no_warning_while_segments_are_arriving(qt_app):
     window = make_window(qt_app)
     try:
-        window.transcription_worker = _FakeWorker(quiet_for=5)
+        window.worker = _StalledWorker(quiet_for=5)
         window._stall_warned = False
 
         window._check_for_stall()
 
-        assert "No new speech" not in window.preview_text.toPlainText()
+        assert "No new speech" not in shown_text(window)
     finally:
         window.close()
 
@@ -239,18 +245,15 @@ def test_warns_once_when_the_pipeline_goes_quiet(qt_app):
 
     window = make_window(qt_app)
     try:
-        window.transcription_worker = _FakeWorker(
-            quiet_for=MainWindow.STALL_WARN_AFTER_S + 60
-        )
+        window.worker = _StalledWorker(quiet_for=MainWindow.STALL_WARN_AFTER_S + 60)
         window._stall_warned = False
 
         window._check_for_stall()
         window._check_for_stall()  # still stalled; must not spam
         window._check_for_stall()
 
-        shown = window.preview_text.toPlainText()
-        assert shown.count("No new speech") == 1
-        assert "Still working" in shown
+        assert shown_text(window).count("No new speech") == 1
+        assert "Still working" in shown_text(window)
     finally:
         window.close()
 
@@ -260,8 +263,8 @@ def test_warning_rearms_after_recovery(qt_app):
 
     window = make_window(qt_app)
     try:
-        stalled = _FakeWorker(quiet_for=MainWindow.STALL_WARN_AFTER_S + 60)
-        window.transcription_worker = stalled
+        stalled = _StalledWorker(quiet_for=MainWindow.STALL_WARN_AFTER_S + 60)
+        window.worker = stalled
         window._stall_warned = False
         window._check_for_stall()
 
@@ -270,18 +273,18 @@ def test_warning_rearms_after_recovery(qt_app):
         stalled._quiet = MainWindow.STALL_WARN_AFTER_S + 60  # and stall again
         window._check_for_stall()
 
-        assert window.preview_text.toPlainText().count("No new speech") == 2
+        assert shown_text(window).count("No new speech") == 2
     finally:
         window.close()
 
 
-def test_watch_stops_itself_when_the_worker_finishes(qt_app):
+def test_watch_stops_itself_when_the_trip_finishes(qt_app):
     window = make_window(qt_app)
     try:
         window._start_stall_watch()
         assert window._stall_timer.isActive()
 
-        window.transcription_worker = _FakeWorker(quiet_for=0, running=False)
+        window.worker = _StalledWorker(quiet_for=0, running=False)
         window._check_for_stall()
 
         assert not window._stall_timer.isActive()

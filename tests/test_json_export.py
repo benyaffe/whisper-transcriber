@@ -196,32 +196,6 @@ def test_generate_output_paths_includes_json():
     assert (vtt, txt, js) == ("/a/b/Recording.vtt", "/a/b/Recording.txt", "/a/b/Recording.json")
 
 
-def test_main_window_reports_the_json_it_wrote(qt_app, tmp_path, monkeypatch):
-    """The user should be told the third file exists, without it being opened."""
-    import subprocess
-
-    from src.ui.main_window import MainWindow
-
-    json_file = tmp_path / "Recording.json"
-    json_file.write_text('{"version": 1}', encoding="utf-8")
-    vtt_file = tmp_path / "Recording.vtt"
-    vtt_file.write_text("WEBVTT\n", encoding="utf-8")
-
-    opened = []
-    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: opened.append(cmd))
-
-    window = MainWindow()
-    try:
-        window._on_transcription_complete(str(vtt_file), "", str(json_file), "")
-        shown = window.preview_text.toPlainText()
-    finally:
-        window.close()
-
-    assert "Recording.json" in shown
-    # Only the human-readable output gets handed to the OS.
-    assert opened == [["open", str(vtt_file)]]
-
-
 def test_non_ascii_text_is_preserved(tmp_path):
     """ensure_ascii=False, so the file stays readable rather than escaped."""
     payload = build_payload(

@@ -55,16 +55,29 @@ def test_progress_drives_the_bar_and_the_stage_label(view):
 
 
 def test_the_stage_label_is_wide_enough_for_what_goes_in_it(view):
-    """A clipped label defeats the point of having one."""
+    """A clipped label defeats the point of having one.
+
+    Measures the real diarization stage names rather than a copy of them, so
+    renaming a stage to something longer fails here instead of silently
+    clipping in the one place the operator is looking.
+    """
     from PyQt6.QtGui import QFontMetrics
 
-    metrics = QFontMetrics(view.stage_label.font())
-    for text in (
+    from src.core.diarization import (
+        DIARIZATION_POST_STEP_LABELS,
+        DIARIZATION_STAGE_LABELS,
+    )
+
+    candidates = [
         "Transcribing, about 12m 34s left",
-        "Analyzing voices 1200/1200",
         "Joining 3 recordings",
-        "Grouping speakers",
-    ):
+        "Loading speaker model",
+    ]
+    for label in list(DIARIZATION_STAGE_LABELS.values()) + list(DIARIZATION_POST_STEP_LABELS.values()):
+        candidates.append(f"{label} 1200/1200")
+
+    metrics = QFontMetrics(view.stage_label.font())
+    for text in candidates:
         assert metrics.horizontalAdvance(text) <= view.stage_label.width(), text
 
 

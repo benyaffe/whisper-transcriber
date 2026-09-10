@@ -124,9 +124,10 @@ def main():
     app.main_window = window  # For Cmd+Tab window raising
     window.show()
 
-    # If files were passed via command line (drag onto icon), queue them
+    # Files passed on the command line, which is how macOS delivers a drag
+    # onto the app icon at launch. They become the recordings of a new trip.
     if files_to_process:
-        window.queue_files(files_to_process)
+        window.open_files(files_to_process)
 
     ret = app.exec()
 
