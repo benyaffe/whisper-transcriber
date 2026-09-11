@@ -18,7 +18,7 @@ import pytest
 
 from src.ui.main_window import MainWindow, _read_json
 from src.ui.podcastnotes.writeup_view import (
-    PANE_CONTEXT, PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS,
+    PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS,
 )
 
 
@@ -80,7 +80,6 @@ class _FakeWriteUp:
         self.context_map = ContextMap(likely_errors=[
             {"heard": "Ridgelane", "probably": "Ridgeline", "confidence": "high"},
         ])
-        self.rejected = None
         self.description = ""
         self.work_dir = "/tmp/trip"
         self.notes = ["Corrected: a -> b (1x)"]
@@ -91,9 +90,6 @@ class _FakeWriteUp:
 
     def apply_corrections(self):
         self.corrections_applied = True
-
-    def reject_corrections(self, heard):
-        self.rejected = heard
 
     def voices(self):
         return []
@@ -131,36 +127,16 @@ def test_the_context_step_runs_first(window):
     assert _FakeWorker.started == ["context"]
 
 
-def test_the_context_map_is_shown_before_anything_is_applied(window):
-    """Everything downstream treats this map as fact, so it is the last point
-    where a wrong entry is cheap to remove rather than something to spot in a
-    finished document."""
-    _FakeWorker.results = {"context": "a map"}
+def test_the_corrections_are_applied_without_being_reviewed(window):
+    """The gate asked for a judgement before there was anything to judge
+    against. The same work now happens on the finished screen, where the
+    person can see which words are actually wrong."""
+    _FakeWorker.results = {"context": "a map", "speakers": []}
 
     window._run_step("context")
 
-    assert window.writeup_view.panes.currentIndex() == PANE_CONTEXT
-    assert window.writeup.corrections_applied is False
-    assert "speakers" not in _FakeWorker.started
-
-
-def test_approving_the_context_applies_it_and_moves_on(window):
-    """Corrections are deterministic and instant, so they happen inline rather
-    than costing a thread."""
-    _FakeWorker.results = {"speakers": []}
-
-    window._context_approved([])
-
     assert window.writeup.corrections_applied is True
-    assert _FakeWorker.started == ["speakers"]
-
-
-def test_an_unticked_correction_is_dropped_before_it_is_applied(window):
-    _FakeWorker.results = {"speakers": []}
-
-    window._context_approved(["Ridgelane"])
-
-    assert window.writeup.rejected == ["Ridgelane"]
+    assert _FakeWorker.started == ["context", "speakers"]
 
 
 def test_the_speaker_step_stops_and_asks(window):

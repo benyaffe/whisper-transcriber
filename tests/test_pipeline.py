@@ -649,3 +649,39 @@ def test_a_trip_saved_before_revisions_existed_still_opens(tmp_path):
 
     assert again.revision == 0 and again.revisions_left == pipeline.MAX_REVISIONS
     assert again.impossible == [] and again.pending_write is False
+
+
+def test_a_correction_they_say_is_wrong_stops_happening(tmp_path, monkeypatch):
+    """The one thing the review screen could do that a substitution cannot."""
+    _revision(monkeypatch, rejected=["Ridgelane"])
+    run = _done(tmp_path)
+
+    run.revise("Ridgelane is right, that is how the site spells it")
+
+    assert "We went to Ridgelane Northgate." in run.working()["segments"][0]["text"]
+
+
+def test_leaving_a_word_alone_wins_over_replacing_it(tmp_path, monkeypatch):
+    """A pass that returns both is confused, and the safer reading of a
+    contradiction is not to touch somebody's words."""
+    _revision(monkeypatch, rejected=["Ridgelane"], context_map=ContextMap(
+        likely_errors=[{"heard": "Ridgelane", "probably": "Corwall", "confidence": "high"}],
+    ))
+    run = _done(tmp_path)
+
+    run.revise("leave Ridgelane as it is")
+
+    assert run.context_map.likely_errors == [
+        {"heard": "Kestler", "probably": "Kessler", "confidence": "low"},
+    ]
+
+
+def test_a_rejection_matches_however_it_was_typed(tmp_path, monkeypatch):
+    """Keyed the same way the merge keys a row, so case and spacing cannot make
+    a rejection silently miss the row it names."""
+    _revision(monkeypatch, rejected=["  ridgelane  "])
+    run = _done(tmp_path)
+
+    run.revise("Ridgelane is right")
+
+    assert [e["heard"] for e in run.context_map.likely_errors] == ["Kestler"]

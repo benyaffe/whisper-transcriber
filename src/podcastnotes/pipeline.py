@@ -129,12 +129,12 @@ class WriteUp:
         state carries the decision. A correction rejected here stays rejected
         when the trip is reopened tomorrow.
         """
-        dropping = {h.strip() for h in (heard or []) if h and h.strip()}
+        dropping = {context._key(h) for h in (heard or []) if str(h).strip()}
         if not dropping:
             return
         self.context_map.likely_errors = [
             row for row in self.context_map.likely_errors
-            if (row.get("heard") or "").strip() not in dropping
+            if context._key(row.get("heard")) not in dropping
         ]
         self.save()
 
@@ -267,6 +267,10 @@ class WriteUp:
         self.context_map = context.merge(
             self.context_map, found.context_map, answered=found.settled
         )
+        # After the merge, so "that word was right as it stood" is final even if
+        # the same pass also proposed a replacement for it. Leaving words alone
+        # is the safer reading of a contradiction.
+        self.reject_corrections(found.rejected)
         if found.speakers:
             self.speaker_names.update(found.speakers)
         self.impossible = list(found.impossible)

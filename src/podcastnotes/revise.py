@@ -57,6 +57,7 @@ open. Use the search tool as much as you need.
 
 Return ONLY a JSON object, no prose and no code fence, with keys:
   "settled": [the exact open questions their note answers, copied from the list you were given]
+  "rejected": [the exact "heard" values of corrections that should not happen after all]
   "impossible": [things they asked for that the recording cannot support, one sentence each]
   "speakers": {"Speaker 3": "Simone Vasari"}
   "people": [{"name", "role", "why_relevant", "confidence"}]
@@ -72,6 +73,9 @@ Vasari" much more often means that a speaker label is her than that those syllab
 and naming the label is the useful reading. Use the labels exactly as they appear in the
 transcript you were given.
 
+"rejected" is for when they say a word was right as it stood. Copy the "heard" value from the
+background you were given, exactly. Use this rather than a correction from the word to itself.
+
 "impossible" is not a failure. If they ask you to say something nobody said, or to name somebody
 the recording never mentions, say so there and change nothing for it. Inventing a substitution to
 look helpful puts a fabricated claim in a document somebody publishes."""
@@ -83,6 +87,7 @@ class Revision:
 
     context_map: ContextMap = field(default_factory=ContextMap)
     settled: list = field(default_factory=list)
+    rejected: list = field(default_factory=list)
     impossible: list = field(default_factory=list)
     speakers: dict = field(default_factory=dict)
 
@@ -93,6 +98,7 @@ class Revision:
             or self.context_map.people
             or self.speakers
             or self.impossible
+            or self.rejected
         )
 
 
@@ -123,6 +129,9 @@ def from_notes(
     return Revision(
         context_map=found,
         settled=[str(q).strip() for q in (parsed.get("settled") or []) if str(q).strip()],
+        rejected=[
+            str(h).strip() for h in (parsed.get("rejected") or []) if str(h).strip()
+        ],
         impossible=[
             str(i).strip() for i in (parsed.get("impossible") or []) if str(i).strip()
         ],

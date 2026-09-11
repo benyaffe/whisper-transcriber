@@ -276,3 +276,24 @@ def test_both_prompts_describe_substitution_the_same_way():
 
     assert context.SUBSTITUTION_RULES in context.SYSTEM
     assert context.SUBSTITUTION_RULES in filled
+
+
+# --- taking a correction back ----------------------------------------------------
+
+
+def test_a_word_that_was_right_all_along_comes_back_as_a_rejection():
+    """The one thing the old review screen could do that a substitution cannot:
+    say that a proposed change should not happen."""
+    client = _answers({"rejected": ["Simon"]})
+
+    found = revise.from_notes(EXISTING, "Simon is right, she spells it that way.",
+                              TRANSCRIPT, client=client, search=_ok_search)
+
+    assert found.rejected == ["Simon"]
+    assert found.is_empty is False
+
+
+def test_the_prompt_asks_for_a_rejection_rather_than_a_loop():
+    """A correction from a word to itself would be applied, and `correct.apply`
+    would report changing "Simon" to "Simon" in the change log."""
+    assert "rather than a correction from the word to itself" in revise.SYSTEM

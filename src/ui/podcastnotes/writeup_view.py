@@ -25,7 +25,7 @@ import os
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton,
     QScrollArea, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -43,10 +43,9 @@ READABLE_WIDTH = 620
 # every one after it. Adding the questions pane silently moved the finished
 # documents from 2 to 3, which a bare number gives no way to notice.
 PANE_WAITING = 0
-PANE_CONTEXT = 1
-PANE_SPEAKERS = 2
-PANE_QUESTIONS = 3
-PANE_DONE = 4
+PANE_SPEAKERS = 1
+PANE_QUESTIONS = 2
+PANE_DONE = 3
 
 
 class SpeakerRow(QFrame):
@@ -137,7 +136,6 @@ class SpeakerRow(QFrame):
 class WriteUpView(QWidget):
     """Waiting, naming, answering, and the finished pair of documents."""
 
-    context_approved = pyqtSignal(list)   # the corrections to drop
     speakers_confirmed = pyqtSignal(dict)
     answers_given = pyqtSignal(dict)
     publish_requested = pyqtSignal()
@@ -151,7 +149,6 @@ class WriteUpView(QWidget):
         self._audio_path = ""
         self._rows = []
         self._questions = []
-        self._corrections = []
         self._player = None
         self._findings = []
         # Where the next seek should land. Held rather than applied, because
@@ -172,7 +169,6 @@ class WriteUpView(QWidget):
 
         self.panes = QStackedWidget()
         self.panes.addWidget(self._waiting_pane())
-        self.panes.addWidget(self._context_pane())
         self.panes.addWidget(self._speakers_pane())
         self.panes.addWidget(self._questions_pane())
         self.panes.addWidget(self._done_pane())
@@ -231,43 +227,6 @@ class WriteUpView(QWidget):
         layout.addWidget(self.retry, alignment=Qt.AlignmentFlag.AlignCenter)
 
         layout.addStretch(1)
-        return pane
-
-    def _context_pane(self) -> QWidget:
-        """What was found, and the chance to reject a correction before it lands.
-
-        The corrections are the editable part because they are the part that
-        changes the words. Everything else here is background that only
-        influences how Claude reads the recording, whereas an entry in this
-        list is applied literally and everywhere, so one wrong row becomes one
-        wrong word throughout a published document.
-        """
-        pane = QWidget()
-        layout = QVBoxLayout(pane)
-
-        self.found = QLabel("")
-        self.found.setWordWrap(True)
-        role(self.found, "muted")
-        layout.addWidget(self.found)
-
-        area = QScrollArea()
-        area.setWidgetResizable(True)
-        self._correction_holder = QWidget()
-        self._correction_layout = QVBoxLayout(self._correction_holder)
-        self._correction_layout.addStretch(1)
-        area.setWidget(self._correction_holder)
-        layout.addWidget(area, 1)
-
-        row = QHBoxLayout()
-        self.rejected_count = QLabel("")
-        role(self.rejected_count, "muted")
-        row.addWidget(self.rejected_count)
-        row.addStretch(1)
-        self.approve = QPushButton("Use these corrections")
-        role(self.approve, "primary")
-        self.approve.clicked.connect(self._approve_context)
-        row.addWidget(self.approve)
-        layout.addLayout(row)
         return pane
 
     def _speakers_pane(self) -> QWidget:
@@ -484,43 +443,6 @@ class WriteUpView(QWidget):
         self.detail.setText("")
         self.panes.setCurrentIndex(PANE_WAITING)
 
-    def review_context(self, context_map):
-        """Show what the background search found, before any of it is applied."""
-        for widget in self._corrections:
-            widget.setParent(None)
-        self._corrections = []
-
-        self.found.setText(
-            f"Found {len(context_map.people)} people, "
-            f"{len(context_map.terms)} terms and "
-            f"{len(context_map.projects)} projects, over "
-            f"{len(context_map.searches)} searches. "
-            f"These are the corrections it wants to make to the transcript. "
-            f"Untick anything that looks wrong."
-        )
-        for row in context_map.likely_errors:
-            box = _CorrectionRow(row, self._correction_holder)
-            box.tick.toggled.connect(self._count_rejected)
-            self._correction_layout.insertWidget(
-                self._correction_layout.count() - 1, box
-            )
-            self._corrections.append(box)
-
-        self._count_rejected()
-        self.panes.setCurrentIndex(PANE_CONTEXT)
-
-    def _count_rejected(self):
-        dropped = [b for b in self._corrections if not b.tick.isChecked()]
-        self.rejected_count.setText(
-            "" if not dropped
-            else f"{len(dropped)} correction{'s' if len(dropped) != 1 else ''} will not be applied."
-        )
-
-    def _approve_context(self):
-        self.context_approved.emit(
-            [b.heard for b in self._corrections if not b.tick.isChecked()]
-        )
-
     def ask_speakers(self, voices: list, suggestions: list = None):
         by_label = {s.speaker: s for s in (suggestions or [])}
         for row in self._rows:
@@ -722,45 +644,6 @@ class WriteUpView(QWidget):
         self._wanted_at = None
         if self._player is not None:
             self._player.stop()
-
-
-class _CorrectionRow(QFrame):
-    """One proposed substitution, with a tick that decides whether it happens."""
-
-    def __init__(self, row, parent=None):
-        super().__init__(parent)
-        self.heard = (row.get("heard") or "").strip()
-        role(self, "card")
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(4)
-
-        confidence = (row.get("confidence") or "").strip().lower()
-        marker = "" if confidence == "high" else "  (will be marked uncertain)"
-        self.label = (
-            f"{self.heard}  →  {(row.get('probably') or '').strip()}{marker}"
-        )
-
-        # The text is a wrapping label beside the box rather than the box's own
-        # caption. A QCheckBox caption does not wrap, so a correction covering
-        # four heard variants ran off the edge and put a horizontal scrollbar
-        # under a vertical list, leaving the change unreadable.
-        top = QHBoxLayout()
-        self.tick = QCheckBox()
-        self.tick.setChecked(True)
-        top.addWidget(self.tick, alignment=Qt.AlignmentFlag.AlignTop)
-        text = QLabel(self.label)
-        text.setWordWrap(True)
-        text.setBuddy(self.tick)
-        top.addWidget(text, 1)
-        layout.addLayout(top)
-
-        evidence = (row.get("evidence") or "").strip()
-        if evidence:
-            why = QLabel(evidence)
-            why.setWordWrap(True)
-            role(why, "faint")
-            layout.addWidget(why)
 
 
 class _QuestionBox(QFrame):
