@@ -416,3 +416,236 @@ def test_what_was_asked_survives_a_closed_window(tmp_path):
     run.next_questions(client=_client({"questions": [{"marker": "Kessler", "ask": "Who?"}]}))
 
     assert WriteUp.resume(str(tmp_path), _original()).asked == ["Kessler"]
+
+
+# --- correcting after the fact ---------------------------------------------------
+#
+# The gate before the documents existed asked for a judgement with nothing to
+# judge against. This is the same work moved to where the person can see what
+# is wrong, and it is a fresh Glean pass because a name they supply is a search
+# key rather than just a spelling.
+
+
+def _done(tmp_path):
+    run = _ready(tmp_path, step=Step.DONE)
+    run.transcript = "# Transcript\n\nold"
+    run.summary = "# Summary\n\nold"
+    return run
+
+
+def _revision(monkeypatch, **fields):
+    """Stand in for the Glean pass, so these tests are about the pipeline."""
+    from src.podcastnotes import revise as revise_module
+
+    seen = {}
+
+    def fake(context_map, notes, transcript, **kw):
+        seen["notes"] = notes
+        seen["transcript"] = transcript
+        seen["speakers"] = kw.get("speakers")
+        return revise_module.Revision(**fields)
+
+    monkeypatch.setattr(pipeline.revise, "from_notes", fake)
+    return seen
+
+
+def test_a_revision_can_only_happen_once_there_is_something_to_revise(tmp_path):
+    run = _ready(tmp_path, step=Step.QUESTIONS)
+
+    with pytest.raises(OutOfOrder):
+        run.revise("the director is Kessler")
+
+
+def test_a_revision_does_not_move_the_run_backwards(tmp_path, monkeypatch):
+    """It is a second pass over a settled record, not the run re-running. If it
+    moved the step, every later stage would demand to be redone."""
+    _revision(monkeypatch)
+    run = _done(tmp_path)
+
+    run.revise("the director is Kessler")
+
+    assert run.step is Step.DONE
+
+
+def test_an_empty_note_spends_nothing(tmp_path, monkeypatch):
+    """A full agentic Glean loop whose only possible input is nothing at all."""
+    called = []
+    monkeypatch.setattr(pipeline.revise, "from_notes",
+                        lambda *a, **k: called.append(1))
+    run = _done(tmp_path)
+
+    found = run.revise("   ")
+
+    assert called == []
+    assert found.is_empty and run.revision == 0
+
+
+def test_the_note_is_researched_against_the_raw_transcript(tmp_path, monkeypatch):
+    """Corrections are re-applied from the original every time, so a row written
+    against the polished document matches nothing."""
+    seen = _revision(monkeypatch)
+    run = _done(tmp_path)
+
+    run.revise("the director is Kessler")
+
+    # "Ridgelane" is a high-confidence correction, so `working()` has already
+    # turned it into "Ridgeline". Sending that version would have the pass write
+    # `heard: "Ridgeline"`, which matches nothing when the corrections are next
+    # applied from the original.
+    assert "We went to Ridgelane Northgate." in seen["transcript"]
+    assert "Ridgeline" not in seen["transcript"]
+    assert "# Transcript" not in seen["transcript"]
+    assert seen["speakers"] == ["Speaker 1", "Speaker 2"]
+
+
+def test_what_they_say_replaces_the_hedged_row_rather_than_joining_it(tmp_path, monkeypatch):
+    """The single most dangerous thing about this feature. `correct._proposals`
+    sorts longest-`heard` first with a *stable* sort, so an appended row for
+    words an existing row already claims never fires: the old guess wins and the
+    person is told their own correction was not found in the transcript."""
+    _revision(monkeypatch, context_map=ContextMap(likely_errors=[
+        {"heard": "Kestler", "probably": "Kraker", "confidence": "high"},
+    ]))
+    run = _done(tmp_path)
+
+    run.revise("his name is Kraker, spelt with a K")
+
+    rows = [e for e in run.context_map.likely_errors if e["heard"] == "Kestler"]
+    assert len(rows) == 1
+    assert "Kraker" in run.working()["segments"][1]["text"]
+
+
+def test_a_question_they_answered_stops_being_open(tmp_path, monkeypatch):
+    """Open questions go into the writing prompt under "do not present these as
+    settled", so leaving one there makes the rewrite hedge about the exact thing
+    they just settled. That is the original complaint, restated."""
+    _revision(monkeypatch, settled=["Who is the director?"])
+    run = _done(tmp_path)
+    run.context_map.open_questions = ["Who is the director?", "Which site?"]
+
+    run.revise("the director is Kessler")
+
+    assert run.context_map.open_questions == ["Which site?"]
+
+
+def test_naming_a_voice_is_applied_like_any_other_name(tmp_path, monkeypatch):
+    """"The coordinator is Simone Vasari" is far more often an attribution than
+    a spelling. `working()` re-applies names from the original every time, so
+    this needs no plumbing beyond the merge."""
+    _revision(monkeypatch, speakers={"Speaker 2": "Simone Vasari"})
+    run = _done(tmp_path)
+
+    run.revise("Speaker 2 is Simone Vasari")
+
+    assert run.working()["segments"][1]["speaker"] == "Simone Vasari"
+
+
+def test_what_cannot_be_done_is_kept_to_be_shown(tmp_path, monkeypatch):
+    """Doing nothing is indistinguishable from ignoring them, so they retype it
+    and pay for another pass."""
+    _revision(monkeypatch, impossible=["Nobody mentions a Dr Okafor."])
+    run = _done(tmp_path)
+
+    run.revise("add Dr Okafor from cardiology")
+
+    assert run.impossible == ["Nobody mentions a Dr Okafor."]
+
+
+def test_a_new_impossible_list_replaces_the_last_one(tmp_path, monkeypatch):
+    """Otherwise the second pass shows a complaint about the first pass's note,
+    which by then has usually been dealt with."""
+    _revision(monkeypatch, impossible=["first"])
+    run = _done(tmp_path)
+    run.revise("one")
+    _revision(monkeypatch, impossible=["second"])
+
+    run.revise("two")
+
+    assert run.impossible == ["second"]
+
+
+def test_the_documents_are_marked_stale_until_they_are_rewritten(tmp_path, monkeypatch):
+    """Covers a crash between the merge and the rewrite. Without it the finished
+    screen shows saved documents beside a change log computed from a newer map,
+    which is a worse lie than an error."""
+    _revision(monkeypatch)
+    run = _done(tmp_path)
+
+    run.revise("the director is Kessler")
+    assert run.pending_write is True
+    assert WriteUp.resume(str(tmp_path), _original()).pending_write is True
+
+    run.write_documents(client=_client({"transcript": "t", "summary": "s"}))
+    assert run.pending_write is False
+
+
+def test_a_pass_that_died_is_not_charged_as_an_attempt(tmp_path, monkeypatch):
+    """So "Try again" after a Glean outage is a repeat, not a second of five."""
+    def dead(*a, **k):
+        raise pipeline.context.GleanUnavailable("no route to host")
+
+    monkeypatch.setattr(pipeline.revise, "from_notes", dead)
+    run = _done(tmp_path)
+
+    with pytest.raises(pipeline.context.GleanUnavailable):
+        run.revise("the director is Kessler")
+
+    assert run.revision == 0 and run.revisions_left == pipeline.MAX_REVISIONS
+
+
+def test_the_fifth_rewrite_is_the_last(tmp_path, monkeypatch):
+    """Somebody on their sixth "still wrong" has hit something this tool cannot
+    fix, and saying so is more use than spending another pass."""
+    _revision(monkeypatch)
+    run = _done(tmp_path)
+    for i in range(pipeline.MAX_REVISIONS):
+        run.revise(f"note {i}")
+
+    assert run.revisions_left == 0
+    with pytest.raises(pipeline.RevisionsExhausted):
+        run.revise("one more")
+
+
+def test_everything_they_said_reaches_the_writing(tmp_path, monkeypatch):
+    """Much of a note never becomes a substitution. "Site 3 was the busiest"
+    changes no words in the transcript and everything about the summary, and
+    without this it would vanish between the two."""
+    _revision(monkeypatch)
+    run = _done(tmp_path)
+    run.revise("site 3 was the busiest")
+    run.revise("and Kessler had left by then")
+
+    sent = []
+    from src.podcastnotes import output
+    monkeypatch.setattr(output, "_shared", lambda d, c, s, st, rev=(): sent.append(rev) or "")
+    run.write_documents(client=_client({"transcript": "t", "summary": "s"}))
+
+    assert sent[0] == ["site 3 was the busiest", "and Kessler had left by then"]
+
+
+def test_the_revisions_survive_a_closed_window(tmp_path, monkeypatch):
+    _revision(monkeypatch, impossible=["no Dr Okafor"])
+    run = _done(tmp_path)
+    run.revise("add Dr Okafor")
+
+    again = WriteUp.resume(str(tmp_path), _original())
+
+    assert again.revision == 1
+    assert again.revision_notes == ["add Dr Okafor"]
+    assert again.impossible == ["no Dr Okafor"]
+
+
+def test_a_trip_saved_before_revisions_existed_still_opens(tmp_path):
+    """The whole migration: it resumes as never revised and behaves as it did."""
+    run = _done(tmp_path)
+    run.save()
+    path = tmp_path / pipeline.STATE_FILENAME
+    saved = json.loads(path.read_text())
+    for key in ("revision", "revision_notes", "impossible", "pending_write"):
+        saved.pop(key)
+    path.write_text(json.dumps(saved))
+
+    again = WriteUp.resume(str(tmp_path), _original())
+
+    assert again.revision == 0 and again.revisions_left == pipeline.MAX_REVISIONS
+    assert again.impossible == [] and again.pending_write is False

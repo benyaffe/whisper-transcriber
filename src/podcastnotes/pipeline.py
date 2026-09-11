@@ -29,10 +29,21 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 
-from src.podcastnotes import attribution, context, correct, output, qa, speaker_library
+from src.podcastnotes import (
+    attribution, context, correct, output, qa, revise, speaker_library,
+)
 from src.podcastnotes.context import ContextMap
 
 STATE_FILENAME = "writeup.json"
+
+# A backstop against a loop, not a ration on a legitimate second look. Somebody
+# on their fifth "no, still wrong" has hit something this tool cannot fix, and
+# saying so is more use than spending another pass.
+MAX_REVISIONS = 5
+
+
+class RevisionsExhausted(Exception):
+    """Five rewrites is where asking again stops being the answer."""
 
 
 class Step(Enum):
@@ -75,6 +86,15 @@ class WriteUp:
     transcript: str = ""
     summary: str = ""
     notes: list = field(default_factory=list)
+
+    # Rewrites asked for after the documents were first delivered.
+    revision: int = 0
+    revision_notes: list = field(default_factory=list)
+    impossible: list = field(default_factory=list)
+    # The map has moved on but the documents have not. Set between the merge
+    # and the rewrite, so a crash in between does not leave the finished screen
+    # showing saved documents beside a change log computed from a newer map.
+    pending_write: bool = False
 
     # --- the sequence ---------------------------------------------------------
 
@@ -206,6 +226,54 @@ class WriteUp:
             self._advance(Step.WRITE)
         self.save()
 
+    @property
+    def revisions_left(self) -> int:
+        return max(MAX_REVISIONS - self.revision, 0)
+
+    def revise(self, notes: str, client=None, on_search=None):
+        """Take the person at their word, look again, and rewrite.
+
+        Reached only from DONE, and it does not move the step: this is not the
+        run going backwards. `_require` is a floor rather than an equality, so
+        `write_documents` already re-runs from there and no new Step is needed.
+
+        The count goes up only once the research has returned. A pass that dies
+        on a Glean outage costs nothing, so "Try again" is a repeat rather than
+        a second attempt out of five.
+        """
+        self._require(Step.DONE)
+        text = (notes or "").strip()
+        if not text:
+            # A full agentic Glean loop that can only return what it was given.
+            return revise.Revision()
+        if self.revisions_left <= 0:
+            raise RevisionsExhausted(
+                "This has been rewritten five times. Something here needs a person "
+                "rather than another pass."
+            )
+
+        found = revise.from_notes(
+            self.context_map,
+            text,
+            _as_text(self.original),
+            description=self.description,
+            speakers=[s.get("id") for s in (self.original.get("speakers") or [])],
+            on_search=on_search,
+            client=client,
+        )
+
+        self.revision += 1
+        self.revision_notes.append(text)
+        self.context_map = context.merge(
+            self.context_map, found.context_map, answered=found.settled
+        )
+        if found.speakers:
+            self.speaker_names.update(found.speakers)
+        self.impossible = list(found.impossible)
+        self.pending_write = True
+        self.save()
+        return found
+
     def write_documents(self, client=None, style=None) -> output.Documents:
         """Stage 7. Both documents, from a record that is now settled."""
         self._require(Step.WRITE)
@@ -216,9 +284,11 @@ class WriteUp:
             boundaries=self.boundaries,
             style=style,
             client=client,
+            revisions=self.revision_notes,
         )
         self.transcript = documents.transcript
         self.summary = documents.summary
+        self.pending_write = False
         self._advance(Step.DONE)
         self.save()
         return documents
@@ -243,6 +313,10 @@ class WriteUp:
                     "round_number": self.round_number,
                     "transcript": self.transcript,
                     "summary": self.summary,
+                    "revision": self.revision,
+                    "revision_notes": self.revision_notes,
+                    "impossible": self.impossible,
+                    "pending_write": self.pending_write,
                 },
                 handle,
                 indent=1,
@@ -271,6 +345,12 @@ class WriteUp:
         found.round_number = int(saved.get("round_number") or 1)
         found.transcript = saved.get("transcript", "")
         found.summary = saved.get("summary", "")
+        # Absent in a file written before rewrites existed, which is the whole
+        # migration: it resumes as never revised and behaves as it always did.
+        found.revision = int(saved.get("revision") or 0)
+        found.revision_notes = list(saved.get("revision_notes") or [])
+        found.impossible = list(saved.get("impossible") or [])
+        found.pending_write = bool(saved.get("pending_write"))
         try:
             found.step = Step(saved.get("step"))
         except ValueError:
