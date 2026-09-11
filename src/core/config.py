@@ -69,8 +69,24 @@ def save_hf_token(token: str):
 
 
 def is_speaker_id_enabled() -> bool:
-    """Check if speaker identification is enabled."""
-    return _settings().value(SETTINGS_SPEAKER_ID_ENABLED, False, type=bool)
+    """Whether to name the speakers. On unless somebody turned it off.
+
+    The default has to be True, and it used to be False. Two screens disagreed
+    about it, and a cold-start rehearsal found what that does to somebody new:
+
+      - The setup checklist reads this value. With it False, the HuggingFace
+        row reported "Off, so transcripts will not name speakers" and went
+        green, so the whole list said the app was ready.
+      - The intake screen's "Name the speakers" box is ticked by default and
+        does not read this value at all, so the same person then hit "Naming
+        speakers needs a HuggingFace token" and could not start.
+
+    A checklist that says everything is fine and then a screen that refuses to
+    start is the exact failure that checklist exists to prevent. Only fresh
+    installs are affected, because anybody who has set this once has a stored
+    value and never sees the default.
+    """
+    return _settings().value(SETTINGS_SPEAKER_ID_ENABLED, True, type=bool)
 
 
 def set_speaker_id_enabled(enabled: bool):

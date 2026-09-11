@@ -209,10 +209,18 @@ class TestSettings:
     the one under test, so it asserted nothing about nothing.
     """
 
-    def test_speaker_id_defaults_to_disabled(self, scoped_settings):
+    def test_speaker_id_defaults_to_enabled(self, scoped_settings):
+        """Changed from disabled after a cold-start rehearsal.
+
+        The intake screen's "Name the speakers" box has always been ticked by
+        default, and this value disagreed with it. The setup checklist reads
+        this one, so a new machine got an all-green list saying speaker naming
+        was off and then a trip screen that refused to start without a
+        HuggingFace token. See src/core/config.py for the full account.
+        """
         from src.core.config import is_speaker_id_enabled
 
-        assert is_speaker_id_enabled() is False
+        assert is_speaker_id_enabled() is True
 
     def test_toggle_speaker_id_round_trips(self, scoped_settings):
         from src.core.config import is_speaker_id_enabled, set_speaker_id_enabled

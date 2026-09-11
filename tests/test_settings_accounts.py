@@ -180,3 +180,45 @@ def test_clearing_the_glean_token_removes_it(dialog, fake_keychain):
     dialog._save_account_settings()
 
     assert glean.get_token() == ""
+
+
+# --- the two screens have to agree about naming speakers ------------------------
+
+
+def test_naming_speakers_is_on_by_default(scoped_settings):
+    """Found by a cold-start rehearsal. With this False, the setup checklist
+    read "Off, so transcripts will not name speakers" and went green, and the
+    same person then hit "Naming speakers needs a HuggingFace token" on the
+    trip screen and could not start. A checklist that says everything is fine
+    and then a screen that refuses is the failure the checklist exists to
+    prevent."""
+    from src.core.config import is_speaker_id_enabled
+
+    assert is_speaker_id_enabled() is True
+
+
+def test_the_intake_screen_agrees_with_the_stored_default(qt_app, scoped_settings):
+    """These are two separate defaults in two files and they disagreed. The
+    checklist reads one and the trip screen shows the other."""
+    from src.core.config import is_speaker_id_enabled
+    from src.ui.podcastnotes.intake_view import IntakeView
+
+    view = IntakeView()
+    try:
+        assert view.speakers_checkbox.isChecked() == is_speaker_id_enabled()
+    finally:
+        view.close()
+
+
+def test_a_cold_machine_is_told_the_token_is_missing(scoped_settings, monkeypatch):
+    """Rather than being told it is fine because the feature is off."""
+    from src.core.config import KEYRING_SERVICE
+    from src.podcastnotes.checks_local import check_huggingface
+
+    monkeypatch.setattr("src.core.config.get_hf_token", lambda: "")
+
+    result = check_huggingface()
+
+    assert not result.ok
+    assert "not set up" in result.detail.lower()
+    assert result.skip_action, "there has to be a way past it; it is optional"
