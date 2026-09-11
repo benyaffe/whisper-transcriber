@@ -240,7 +240,11 @@ class WriteUpView(QWidget):
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
-        self.bar.setMaximumWidth(READABLE_WIDTH)
+        # Fixed rather than capped. Added with an alignment, a widget is given
+        # its size hint rather than stretched, and a progress bar's hint is
+        # about 180px, so the cap alone left a stub in the middle of a
+        # thousand-pixel window that read as a decoration.
+        self.bar.setFixedWidth(READABLE_WIDTH)
         layout.addWidget(self.bar, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.estimate = QLabel("")
@@ -258,7 +262,10 @@ class WriteUpView(QWidget):
         # than decoration: a name appearing is proof the thing is working, in a
         # way a spinner never is.
         self.findings = QTextBrowser()
-        self.findings.setMaximumWidth(READABLE_WIDTH)
+        # Fixed for the same reason as the bar: centred by the layout, a widget
+        # gets its size hint, so this was narrower than the bar above it and
+        # wrapped "Ridgeline Health Northgate" across two lines.
+        self.findings.setFixedWidth(READABLE_WIDTH)
         self.findings.setMaximumHeight(150)
         self.findings.hide()
         layout.addWidget(self.findings, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -619,6 +626,10 @@ class WriteUpView(QWidget):
             self._rows.append(row)
 
         self._count_unnamed()
+        # Each pane that stops and asks owns its heading. Left to whatever set
+        # it last, a retry that succeeds lands here under "The write-up
+        # stopped", which says the opposite of what the screen is doing.
+        self.title.setText("Speakers")
         self.panes.setCurrentIndex(PANE_SPEAKERS)
 
     def ask_questions(self, round_):
@@ -642,6 +653,7 @@ class WriteUpView(QWidget):
                 self._question_layout.count() - 1, box
             )
         self._count_answers()
+        self.title.setText("Questions")
         self.panes.setCurrentIndex(PANE_QUESTIONS)
 
     def _count_answers(self):

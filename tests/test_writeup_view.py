@@ -958,3 +958,33 @@ def test_the_prose_is_not_wider_than_the_viewport(view):
 
     assert view.document.viewportMargins().left() == 0
     assert view.document.viewportMargins().right() == 0
+
+
+def test_a_pane_that_asks_owns_its_heading(view):
+    """Left to whatever set it last, a retry that succeeds lands on the
+    speakers under "The write-up stopped", which says the opposite of what the
+    screen is doing. Caught by rendering, not by a test."""
+    view.on_failed("Glean is unavailable")
+
+    view.ask_speakers([_voice("Speaker 1")])
+
+    assert view.title.text() == "Speakers"
+
+
+def test_the_questions_pane_owns_its_heading_too(view):
+    view.on_failed("Glean is unavailable")
+
+    view.ask_questions(_Round([_Q("Kestler")]))
+
+    assert view.title.text() == "Questions"
+
+
+def test_the_progress_bar_is_as_wide_as_the_prose_it_sits_with(view):
+    """Centred by the layout, a widget is given its size hint rather than
+    stretched, and a progress bar's hint is about 180px. The cap alone left a
+    stub in the middle of a thousand-pixel window that read as a decoration
+    rather than as progress."""
+    from src.ui.podcastnotes.writeup_view import READABLE_WIDTH
+
+    assert view.bar.width() == READABLE_WIDTH
+    assert view.findings.width() == READABLE_WIDTH
