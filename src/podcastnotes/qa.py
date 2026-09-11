@@ -276,6 +276,7 @@ def absorb(context_map, answers: dict, client=None):
         row for row in updated.likely_errors if not _answers_it(row, settled)
     ]
 
+    answered = []
     for row in parsed.get("corrections") or []:
         heard = (row.get("heard") or "").strip()
         probably = (row.get("probably") or "").strip()
@@ -285,7 +286,7 @@ def absorb(context_map, answers: dict, client=None):
             # the marker; an identity correction would just be noise in the
             # change log a person reads.
             continue
-        updated.likely_errors.append(
+        answered.append(
             {
                 "heard": heard,
                 "probably": probably,
@@ -294,9 +295,18 @@ def absorb(context_map, answers: dict, client=None):
             }
         )
 
+    # Merged rather than appended, and the same merge the revision pass uses.
+    # Appending is only safe here because the settled rows were dropped just
+    # above: an answer that corrects words some *unsettled* row already claims
+    # would leave the old row firing first, since `correct._proposals` sorts
+    # longest-heard first with a stable sort, and the colleague's own answer
+    # would come back reported as not found in the transcript.
+    from src.podcastnotes import context
+
     still_open = [q.strip() for q in (parsed.get("still_open") or []) if str(q).strip()]
-    updated.open_questions = list(updated.open_questions) + still_open
-    return updated
+    return context.merge(
+        updated, context.ContextMap(likely_errors=answered, open_questions=still_open)
+    )
 
 
 def _answers_it(row: dict, settled: set) -> bool:

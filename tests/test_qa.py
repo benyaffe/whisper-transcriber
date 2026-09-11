@@ -413,3 +413,41 @@ def test_the_questions_are_written_about_the_speakers_not_to_them():
     assert "third person" in qa.SYSTEM
     assert "assembling a write-up" in qa.SYSTEM
     assert "was physically present" not in qa.SYSTEM
+
+
+def test_an_answer_replaces_an_unsettled_row_it_collides_with():
+    """Appending is only safe because the settled rows are dropped first. A
+    correction landing on words some *unsettled* row already claims would leave
+    the old row firing, since `correct._proposals` sorts longest-heard first
+    with a stable sort, and the colleague's own answer would come back reported
+    as not found in the transcript. This is the same merge the revision pass
+    uses, so the two cannot drift."""
+    existing = ContextMap(likely_errors=[
+        {"heard": "Kestler", "probably": "Kessler", "confidence": "low"},
+    ])
+    # They answered about a different marker, and their answer happens to name
+    # the same heard words.
+    client = _answers({"settled": ["60 hold"], "corrections": [
+        {"heard": "Kestler", "probably": "Krakauer", "confidence": "high"},
+        {"heard": "60 hold", "probably": "sixty holding beds", "confidence": "high"},
+    ]})
+
+    updated = qa.absorb(existing, {"60 hold": "Sixty holding beds, and it is Krakauer."},
+                        client=client)
+
+    rows = [e for e in updated.likely_errors if e["heard"] == "Kestler"]
+    assert len(rows) == 1
+    assert rows[0]["probably"] == "Krakauer"
+
+
+def test_a_question_they_left_open_is_not_recorded_twice():
+    """Three rounds ask about overlapping ground, so the same "still open" note
+    comes back more than once and the writing prompt reads it as three
+    unresolved things."""
+    existing = ContextMap(open_questions=["Who is the St. Bede coordinator?"])
+    client = _answers({"settled": [], "corrections": [],
+                       "still_open": ["Who is the St. Bede coordinator?"]})
+
+    updated = qa.absorb(existing, {"Simone": "Not sure."}, client=client)
+
+    assert updated.open_questions == ["Who is the St. Bede coordinator?"]

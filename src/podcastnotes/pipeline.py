@@ -362,6 +362,13 @@ class WriteUp:
             # over is wrong and guessing is worse, so it resumes at the
             # earliest step, which recomputes rather than inventing.
             found.step = Step.CONTEXT
+
+        # After the step is known, and derived rather than saved: a trip
+        # reopened at DONE would otherwise report "No corrections were needed"
+        # beside a document full of them. Rebuilt through the one code path
+        # that knows how, so it cannot disagree with the map it describes.
+        if ORDER.index(found.step) >= ORDER.index(Step.CORRECT):
+            found.working()
         return found
 
 

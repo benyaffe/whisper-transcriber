@@ -685,3 +685,29 @@ def test_a_rejection_matches_however_it_was_typed(tmp_path, monkeypatch):
     run.revise("Ridgelane is right")
 
     assert [e["heard"] for e in run.context_map.likely_errors] == ["Kestler"]
+
+
+def test_a_reopened_trip_still_knows_what_was_corrected(tmp_path):
+    """`notes` is derived inside `working()` and never saved, so a trip
+    reopened at the finished screen reported "No corrections were needed"
+    beside a document full of them. Latent until revising made reopening a
+    finished write-up routine."""
+    run = _ready(tmp_path, step=Step.DONE)
+    run.working()
+    expected = list(run.notes)
+    run.save()
+
+    again = WriteUp.resume(str(tmp_path), _original())
+
+    assert again.notes == expected
+    assert any("Ridgeline" in note for note in again.notes)
+
+
+def test_a_trip_reopened_before_the_corrections_ran_has_nothing_to_report(tmp_path):
+    """`working()` refuses below CORRECT, so deriving the notes has to wait."""
+    run = WriteUp(work_dir=str(tmp_path), original=_original())
+    run.save()
+
+    again = WriteUp.resume(str(tmp_path), _original())
+
+    assert again.notes == []
