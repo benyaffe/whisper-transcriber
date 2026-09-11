@@ -27,10 +27,14 @@ SETTINGS_SPEAKER_ID_ENABLED = "speaker_id_enabled"
 # Deliberately hardcoded, and deliberately NOT the application identity set in
 # main.py. QSettings("WhisperTranscriber", "WhisperTranscriber") resolves to
 # ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist, which
-# is where every existing install has its setting. main.py sets the application
-# name to "Whisper Transcriber" WITH A SPACE, so a default-constructed
-# QSettings() would resolve to a different file and silently reset everyone's
-# preference to the default. Do not "tidy" this to QSettings().
+# is where every existing install has its settings.
+#
+# main.py now sets the application name to "PodcastNotesWT", so a
+# default-constructed QSettings() would resolve to
+# com.whispertranscriber.PodcastNotesWT.plist: a different file, and everyone's
+# preferences silently back to their defaults. Do not "tidy" this to
+# QSettings(). The reason has survived one rename already and the earlier
+# version of this comment described the pre-rename name.
 _SETTINGS_ORG = "WhisperTranscriber"
 _SETTINGS_APP = "WhisperTranscriber"
 

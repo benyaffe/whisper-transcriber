@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-Generate the PodcastNotesWT app icon.
+Generate the PodcastNotesWT app icon and the installer background.
 
 A placeholder, and deliberately a plain one: a page with a waveform through
 it, which is what the app does. Replace resources/icon.png with anything
 better and re-run this to rebuild the .icns.
+
+The installer background lives here too, and used to live in a second script
+that was left behind when the app was renamed. It kept generating "Drag to
+install Whisper Transcriber", which is what every person who downloaded the
+DMG saw first. One script, so the name can only be wrong in one place.
 
     venv/bin/python scripts/create_icon.py
 """
@@ -14,7 +19,7 @@ import shutil
 import subprocess
 import tempfile
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 RESOURCES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "resources")
@@ -23,6 +28,13 @@ SIZE = 1024
 INK = (24, 31, 46)
 PAPER = (255, 255, 255)
 ACCENT = (61, 122, 255)
+
+# The name on the installer window. Read from nowhere else on purpose: the
+# app is called this, and a second copy of the string is how the last one got
+# out of date.
+APP_NAME = "PodcastNotesWT"
+
+DMG_WIDTH, DMG_HEIGHT = 660, 400
 
 
 def draw_icon() -> Image.Image:
@@ -64,8 +76,42 @@ def draw_icon() -> Image.Image:
     return img
 
 
+def draw_dmg_background() -> Image.Image:
+    """The window somebody sees when they open the DMG: drag this, into there."""
+    img = Image.new("RGBA", (DMG_WIDTH, DMG_HEIGHT), (245, 245, 247, 255))
+    draw = ImageDraw.Draw(img)
+
+    try:
+        big = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 18)
+        small = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
+    except OSError:
+        big = small = ImageFont.load_default()
+
+    for text, font, y, colour in (
+        (f"Drag to install {APP_NAME}", big, 30, (80, 80, 80)),
+        (f"Then open Applications and run {APP_NAME}", small, 55, (120, 120, 120)),
+    ):
+        box = draw.textbbox((0, 0), text, font=font)
+        draw.text(((DMG_WIDTH - (box[2] - box[0])) // 2, y), text, fill=colour, font=font)
+
+    middle = DMG_HEIGHT // 2 + 20
+    left = DMG_WIDTH // 2 - 60
+    right = DMG_WIDTH // 2 + 60
+    draw.rectangle([left, middle - 10, right - 30, middle + 10], fill=(100, 100, 100))
+    draw.polygon(
+        [(right - 40, middle - 35), (right, middle), (right - 40, middle + 35)],
+        fill=(100, 100, 100),
+    )
+    return img
+
+
 def main():
     os.makedirs(RESOURCES, exist_ok=True)
+
+    dmg_path = os.path.join(RESOURCES, "dmg_background.png")
+    draw_dmg_background().save(dmg_path)
+    print(f"wrote {dmg_path}")
+
     icon = draw_icon()
     png_path = os.path.join(RESOURCES, "icon.png")
     icon.save(png_path)
