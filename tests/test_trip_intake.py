@@ -372,8 +372,14 @@ def test_the_list_grows_with_its_contents_up_to_a_limit(qt_app, tmp_path):
         for i in range(30):
             listing.add(str(tmp_path / f"more{i}.m4a"))
 
-        cap = RecordingList.MAX_VISIBLE_ROWS * RecordingList.ROW_HEIGHT + 12
-        assert listing.height() == cap
+        # The cap is measured now rather than a constant, because a hardcoded
+        # row height went out of step with the theme and clipped every size.
+        assert listing.height() >= (
+            RecordingList.MAX_VISIBLE_ROWS * listing.sizeHintForRow(0)
+        )
+        capped = listing.height()
+        listing.add(str(tmp_path / "one-more.m4a"))
+        assert listing.height() == capped
     finally:
         listing.deleteLater()
 
@@ -459,3 +465,61 @@ def test_a_changed_token_can_be_picked_up(view, audio_files, monkeypatch):
     view.forget_hf_token()
 
     assert view._token_cache is None
+
+
+# --- the list has to show the rows it claims to --------------------------------
+
+
+def _filled(qt_app, count):
+    listing = RecordingList()
+    for i in range(count):
+        listing.add(f"/tmp/recording-number-{i}.m4a")
+    return listing
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 5, 7])
+def test_every_row_fits_without_a_scrollbar(qt_app, count):
+    """The height was `rows * 30 + 12` against a real row of 32, so it
+    under-shot at every size and a scrollbar appeared from the first item. Two
+    recordings looked like a cramped scrolling box, which reads as the list not
+    growing at all."""
+    listing = _filled(qt_app, count)
+
+    needed = listing.sizeHintForRow(0) * count
+
+    assert listing.height() >= needed, (
+        f"{count} rows need {needed}px, the list is {listing.height()}px"
+    )
+
+
+def test_the_list_stops_growing_at_the_cap(qt_app):
+    """A trip with thirty files must not push Start off the bottom."""
+    at_cap = _filled(qt_app, RecordingList.MAX_VISIBLE_ROWS).height()
+    over_cap = _filled(qt_app, RecordingList.MAX_VISIBLE_ROWS + 6).height()
+
+    assert over_cap == at_cap
+
+
+def test_the_height_is_measured_rather_than_assumed(qt_app):
+    """A constant here goes out of step the moment the theme's item padding or
+    the body font size changes."""
+    listing = _filled(qt_app, 3)
+
+    assert listing.height() >= 3 * listing.sizeHintForRow(0)
+
+
+def test_an_empty_list_still_has_a_sensible_height(qt_app):
+    """There is no row to measure, so this is the one case with a constant."""
+    listing = RecordingList()
+
+    assert listing.height() >= RecordingList.FALLBACK_ROW_HEIGHT
+
+
+def test_removing_a_recording_shrinks_the_list(qt_app):
+    listing = _filled(qt_app, 4)
+    tall = listing.height()
+
+    listing.setCurrentRow(0)
+    listing.remove_selected()
+
+    assert listing.height() < tall

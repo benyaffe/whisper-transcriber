@@ -76,11 +76,26 @@ class RecordingList(QListWidget):
     # the list scrolls instead, so a trip with thirty files does not push the
     # Start button off the bottom of the screen.
     MAX_VISIBLE_ROWS = 7
-    ROW_HEIGHT = 30
+
+    # Used only when the list is empty and there is no row to measure.
+    FALLBACK_ROW_HEIGHT = 32
 
     def _fit_to_contents(self):
+        """Make room for the rows there actually are.
+
+        The height used to be `rows * 30 + 12` against a real row of 32 px, so
+        it under-shot at every size and a scrollbar appeared from the first
+        item. Two recordings looked exactly like a cramped scrolling box, which
+        read as the list not growing at all.
+
+        Measured rather than assumed: the row height comes from the theme's
+        item padding and the body font size, so a change to either would put a
+        constant here back out of step.
+        """
         rows = min(max(self.count(), 1), self.MAX_VISIBLE_ROWS)
-        self.setFixedHeight(rows * self.ROW_HEIGHT + 12)
+        row_height = self.sizeHintForRow(0) if self.count() else self.FALLBACK_ROW_HEIGHT
+        chrome = 2 * self.frameWidth() + 2 * self.spacing() + 8
+        self.setFixedHeight(rows * row_height + chrome)
 
     def add(self, source: str):
         if source in self.sources():
