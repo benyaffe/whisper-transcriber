@@ -101,6 +101,23 @@ class WriteUp:
         self.save()
         return self.context_map
 
+    def reject_corrections(self, heard: list):
+        """Drop the corrections a person unticked, before anything is applied.
+
+        Removed from the map rather than remembered separately, so that the
+        rebuild in `working` cannot quietly reinstate them and so the saved
+        state carries the decision. A correction rejected here stays rejected
+        when the trip is reopened tomorrow.
+        """
+        dropping = {h.strip() for h in (heard or []) if h and h.strip()}
+        if not dropping:
+            return
+        self.context_map.likely_errors = [
+            row for row in self.context_map.likely_errors
+            if (row.get("heard") or "").strip() not in dropping
+        ]
+        self.save()
+
     def working(self) -> dict:
         """The transcript as it currently stands: corrected, and named if known.
 

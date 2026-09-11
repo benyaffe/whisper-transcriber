@@ -18,7 +18,8 @@ import pytest
 from src.podcastnotes.attribution import Suggestion, Voice
 from src.podcastnotes.output import Documents
 from src.ui.podcastnotes.writeup_view import (
-    PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS, PANE_WAITING, WriteUpView, _summarise,
+    PANE_CONTEXT, PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS, PANE_WAITING,
+    WriteUpView, _summarise,
 )
 
 
@@ -366,3 +367,91 @@ def test_why_it_matters_is_shown_when_there_is_a_reason(view):
 
     labels = [c.text() for c in view._questions[0].findChildren(type(view.unnamed))]
     assert any("published against a name" in t for t in labels)
+
+
+# --- reviewing the context map before it is used --------------------------------
+
+
+def _map(rows=None, **kwargs):
+    from src.podcastnotes.context import ContextMap
+
+    return ContextMap(likely_errors=rows if rows is not None else [
+        {"heard": "Ridgelane", "probably": "Ridgeline", "confidence": "high",
+         "evidence": "the project plan spells it Ridgeline"},
+        {"heard": "Errol Markety", "probably": "Errol Marchetti", "confidence": "low"},
+    ], **kwargs)
+
+
+def test_every_proposed_correction_is_listed(view):
+    view.review_context(_map())
+
+    assert view.panes.currentIndex() == PANE_CONTEXT
+    assert len(view._corrections) == 2
+
+
+def test_corrections_start_ticked(view):
+    """The map is usually right, so the default is to accept it and the work is
+    in spotting the exception."""
+    view.review_context(_map())
+
+    assert all(box.tick.isChecked() for box in view._corrections)
+
+
+def test_unticking_one_reports_it_as_rejected(view):
+    view.review_context(_map())
+    view._corrections[1].tick.setChecked(False)
+
+    got = []
+    view.context_approved.connect(got.append)
+    view.approve.click()
+
+    assert got == [["Errol Markety"]]
+
+
+def test_approving_everything_rejects_nothing(view):
+    view.review_context(_map())
+
+    got = []
+    view.context_approved.connect(got.append)
+    view.approve.click()
+
+    assert got == [[]]
+
+
+def test_the_number_being_dropped_is_shown(view):
+    view.review_context(_map())
+    view._corrections[0].tick.setChecked(False)
+
+    assert "1 correction will not be applied" in view.rejected_count.text()
+
+
+def test_an_uncertain_correction_says_it_will_be_marked(view):
+    """So somebody can tell the difference between a change that will be
+    invisible and one that leaves a [?] in the document."""
+    view.review_context(_map())
+
+    assert "marked uncertain" in view._corrections[1].label
+    assert "marked uncertain" not in view._corrections[0].label
+
+
+def test_what_was_searched_is_reported(view):
+    """The user should be able to see what it looked at before trusting it."""
+    view.review_context(_map(people=[{"name": "Anya"}], searches=["a", "b", "c"]))
+
+    assert "1 people" in view.found.text()
+    assert "3 searches" in view.found.text()
+
+
+def test_reviewing_twice_does_not_stack_the_rows(view):
+    view.review_context(_map())
+
+    view.review_context(_map())
+
+    assert len(view._corrections) == 2
+
+
+def test_a_map_with_no_corrections_is_still_reviewable(view):
+    view.review_context(_map(rows=[]))
+
+    assert view.panes.currentIndex() == PANE_CONTEXT
+    assert view._corrections == []

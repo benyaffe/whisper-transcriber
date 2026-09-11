@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         self.run_view.new_trip_requested.connect(self._show_intake)
 
         self.writeup_view = WriteUpView()
+        self.writeup_view.context_approved.connect(self._context_approved)
         self.writeup_view.speakers_confirmed.connect(self._speakers_confirmed)
         self.writeup_view.answers_given.connect(self._answers_given)
         self.writeup_view.publish_requested.connect(self._publish)
@@ -259,8 +260,11 @@ class MainWindow(QMainWindow):
 
     def _step_finished(self, step: str, result):
         if step == "context":
-            self.writeup.apply_corrections()
-            self._run_step("speakers")
+            # Shown before anything is applied. Everything downstream treats
+            # this map as fact, so it is the last point where a wrong entry is
+            # cheap to remove rather than something to spot in a finished
+            # document.
+            self.writeup_view.review_context(self.writeup.context_map)
         elif step == "speakers":
             self.writeup_view.ask_speakers(
                 self.writeup.voices(), suggestions=result or []
@@ -276,6 +280,11 @@ class MainWindow(QMainWindow):
                 self.writeup_view.ask_questions(result)
         elif step == "write":
             self.writeup_view.show_documents(result, notes=self.writeup.notes)
+
+    def _context_approved(self, rejected: list):
+        self.writeup.reject_corrections(rejected)
+        self.writeup.apply_corrections()
+        self._run_step("speakers")
 
     def _speakers_confirmed(self, names: dict):
         self.writeup.confirm_speakers(names)
