@@ -409,3 +409,88 @@ def _fake_http(monkeypatch, on_get=None, on_post=None):
         return FakeResponse(on_get(request.full_url))
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+
+# --- being able to get unstuck ---------------------------------------------------
+
+
+def test_the_wait_ends_when_somebody_gives_up():
+    """Ten minutes is the right timeout, for the reason run_sign_in documents:
+    a shorter one closes the port while an approval is still in flight. But it
+    is far too long to be unable to stop."""
+    import threading
+    import time
+
+    from src.podcastnotes.glean_auth import _wait_for
+
+    cancelled = threading.Event()
+    cancelled.set()
+
+    started = time.monotonic()
+    finished = _wait_for(threading.Event(), cancelled, timeout=30)
+
+    assert finished is False
+    assert time.monotonic() - started < 2, "cancelling did not end the wait"
+
+
+def test_the_wait_ends_as_soon_as_the_browser_comes_back():
+    import threading
+
+    from src.podcastnotes.glean_auth import _wait_for
+
+    done = threading.Event()
+    done.set()
+
+    assert _wait_for(done, threading.Event(), timeout=30) is True
+
+
+def test_the_wait_still_gives_up_eventually():
+    import threading
+    import time
+
+    from src.podcastnotes.glean_auth import _wait_for
+
+    started = time.monotonic()
+
+    assert _wait_for(threading.Event(), None, timeout=0.5) is False
+    assert time.monotonic() - started >= 0.4
+
+
+def test_cancelling_is_not_reported_as_a_failure():
+    """It is a subclass, so anything catching SignInFailed still catches it,
+    but the screen can tell "you stopped" from "something went wrong"."""
+    from src.podcastnotes.glean_auth import SignInCancelled, SignInFailed
+
+    assert issubclass(SignInCancelled, SignInFailed)
+
+
+def test_the_address_is_handed_over_before_the_wait(monkeypatch):
+    """Without it there is nothing to paste into the right browser profile, and
+    the only way out of a sign-in opened on the wrong one is to wait it out."""
+    import threading
+
+    from src.podcastnotes import glean_auth
+
+    monkeypatch.setattr(glean_auth, "discover", lambda i: {
+        "authorization_endpoint": "https://example.com/authorize",
+        "token_endpoint": "https://example.com/token",
+        "registration_endpoint": "https://example.com/register",
+    })
+    monkeypatch.setattr(glean_auth, "supports_self_registration", lambda m: True)
+    monkeypatch.setattr(glean_auth, "register", lambda m, r: "client-123")
+
+    seen = []
+    cancelled = threading.Event()
+    cancelled.set()
+
+    try:
+        glean_auth.run_sign_in(
+            "acme", open_browser=False, timeout=5,
+            on_url=seen.append, cancel=cancelled,
+        )
+    except glean_auth.SignInFailed:
+        pass
+
+    assert len(seen) == 1
+    assert seen[0].startswith("https://example.com/authorize?")
+    assert "client-123" in seen[0]

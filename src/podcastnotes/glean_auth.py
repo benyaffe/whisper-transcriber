@@ -44,6 +44,33 @@ class SignInFailed(Exception):
     """The browser round trip did not produce a usable credential."""
 
 
+class SignInCancelled(SignInFailed):
+    """The person gave up waiting, which is not a failure to report as one.
+
+    A subclass, so anything catching SignInFailed still catches this, but the
+    screen can tell "you stopped" from "something went wrong" and stay quiet
+    about the first.
+    """
+
+
+def _wait_for(done, cancel, timeout: float) -> bool:
+    """Wait for the browser, or for the person to give up, whichever first.
+
+    Polled rather than a single blocking wait, because two Events cannot be
+    waited on together without a third to signal both. A quarter of a second
+    is imperceptible against a sign-in and costs nothing over ten minutes.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if done.wait(0.25):
+            return True
+        if cancel is not None and cancel.is_set():
+            return False
+    return done.is_set()
+
+
 def _base_url(instance: str) -> str:
     return f"https://{instance}-be.glean.com"
 
@@ -164,7 +191,8 @@ def _build_callback_server(holder: dict, done: threading.Event):
     return HTTPServer(("127.0.0.1", 0), Handler)
 
 
-def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 600) -> str:
+def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 600,
+                on_url=None, cancel: "threading.Event" = None) -> str:
     """Register, sign in through the browser, and save the result.
 
     Returns the account's refresh token. Blocks until the browser comes back or
@@ -174,6 +202,15 @@ def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 600) ->
     identity provider and a prompt on a phone, and a timeout that expires
     mid-approval closes the port while the authorisation code is still in
     flight, which produces "connection refused" at the worst possible moment.
+
+    `on_url` is handed the authorisation address before the wait begins. Ten
+    minutes is a long time to be stuck, and the way people get stuck is the
+    browser opening on the wrong profile: without the address there is nothing
+    to paste into the right one, and the only way out is to wait it out.
+
+    `cancel` is an Event that ends the wait early, so somebody who has given up
+    can say so instead of staring at a screen that will not change for ten
+    minutes.
     """
     import webbrowser
 
@@ -207,12 +244,17 @@ def run_sign_in(instance: str, open_browser: bool = True, timeout: int = 600) ->
     listener = threading.Thread(target=server.serve_forever, daemon=True)
     listener.start()
     try:
+        if on_url:
+            on_url(url)
         if open_browser:
             webbrowser.open(url)
-        done.wait(timeout)
+        _wait_for(done, cancel, timeout)
     finally:
         server.shutdown()
         server.server_close()
+
+    if cancel is not None and cancel.is_set() and not done.is_set():
+        raise SignInCancelled("Sign-in cancelled.")
 
     if holder.get("error"):
         raise SignInFailed(f"Glean refused the sign-in: {holder['error']}")

@@ -10,6 +10,8 @@ worker thread and rows update as each one lands. A list that sits blank for
 ten seconds and then fills in at once looks broken while it is working.
 """
 
+import threading
+
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtCore import QUrl
@@ -71,10 +73,28 @@ class SignInWorker(QThread):
     """A browser sign-in, which blocks until the browser comes back."""
 
     done = pyqtSignal(bool, str)
+    opened = pyqtSignal(str)      # the authorisation address, once it exists
 
     def __init__(self, which: str, parent=None):
         super().__init__(parent)
         self.which = which
+        # Held so the screen can offer it. The way people get stuck is the
+        # browser opening on the wrong profile, and without the address there
+        # is nothing to paste into the right one.
+        self.url = ""
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        """Give up waiting. Ten minutes is a long time to be unable to."""
+        self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+    def _remember(self, url: str):
+        self.url = url
+        self.opened.emit(url)
 
     def run(self):
         try:
@@ -85,7 +105,9 @@ class SignInWorker(QThread):
             else:
                 from src.podcastnotes import glean, glean_auth
 
-                glean_auth.run_sign_in(glean.instance())
+                glean_auth.run_sign_in(
+                    glean.instance(), on_url=self._remember, cancel=self._cancel
+                )
             self.done.emit(True, "")
         except Exception as e:
             self.done.emit(False, str(e))
@@ -194,6 +216,7 @@ class SetupView(QWidget):
         self.results: dict[str, Result] = {}
         self.worker = None
         self.sign_in_worker = None
+        self.sign_in_url = ""
         self._build()
 
     # --- construction ---------------------------------------------------------
@@ -233,6 +256,18 @@ class SetupView(QWidget):
         self.recheck_button = QPushButton("Check again")
         self.recheck_button.clicked.connect(lambda: self.start_checks())
         controls.addWidget(self.recheck_button)
+
+        # Both hidden until a sign-in is actually waiting on somebody.
+        self.copy_url_button = QPushButton("Copy the sign-in address")
+        self.copy_url_button.clicked.connect(self._copy_sign_in_url)
+        self.copy_url_button.hide()
+        controls.addWidget(self.copy_url_button)
+
+        self.cancel_sign_in_button = QPushButton("Stop waiting")
+        role(self.cancel_sign_in_button, "quiet")
+        self.cancel_sign_in_button.clicked.connect(self._cancel_sign_in)
+        self.cancel_sign_in_button.hide()
+        controls.addWidget(self.cancel_sign_in_button)
         controls.addStretch()
         self.continue_button = QPushButton("Continue")
         role(self.continue_button, "primary")
@@ -244,9 +279,18 @@ class SetupView(QWidget):
 
     # --- running the checks ----------------------------------------------------
 
-    def start_checks(self, only=None):
+    def start_checks(self, only=None, force: bool = False):
+        """Run the checks, unless a run is already going.
+
+        `force` waits for the run in flight rather than skipping. A successful
+        sign-in used to call this while the person's earlier "Check again" was
+        still running, so it returned early and the row they had just fixed
+        stayed red.
+        """
         if self.worker is not None and self.worker.isRunning():
-            return
+            if not force:
+                return
+            self.worker.wait(5000)
 
         self.recheck_button.setEnabled(False)
         self.continue_button.setEnabled(False)
@@ -364,16 +408,69 @@ class SetupView(QWidget):
         return bool(glean.instance())
 
     def _sign_in(self, which: str):
-        if self.sign_in_worker is not None and self.sign_in_worker.isRunning():
+        """Start a sign-in, or bring the existing one back to the front.
+
+        Pressing it a second time used to do nothing at all, silently. That is
+        exactly what somebody does when the browser opened on the wrong
+        profile: they switch profile and press it again, expecting a new tab.
+        Now they get one, for the same authorisation address, which is what
+        they were asking for.
+        """
+        running = self.sign_in_worker is not None and self.sign_in_worker.isRunning()
+        if running:
+            if self.sign_in_worker.url:
+                import webbrowser
+
+                webbrowser.open(self.sign_in_worker.url)
+                self.summary.setText(
+                    "Opened the sign-in page again. If it lands in the wrong "
+                    "browser profile, copy the address and paste it into the right one."
+                )
             return
+
         self.summary.setText("Waiting for you to sign in, in your browser...")
         self.sign_in_worker = SignInWorker(which, parent=self)
         self.sign_in_worker.done.connect(self._on_sign_in_done)
+        self.sign_in_worker.opened.connect(self._show_sign_in_url)
         self.sign_in_worker.start()
+        self._show_cancel(True)
+
+    def _show_sign_in_url(self, url: str):
+        self.sign_in_url = url
+        self.copy_url_button.setVisible(bool(url))
+
+    def _copy_sign_in_url(self):
+        from PyQt6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.sign_in_url)
+        self.summary.setText(
+            "Address copied. Paste it into the browser profile you want to "
+            "sign in with, and come back here."
+        )
+
+    def _cancel_sign_in(self):
+        if self.sign_in_worker is not None and self.sign_in_worker.isRunning():
+            self.sign_in_worker.cancel()
+        self._show_cancel(False)
+        self.summary.setText("Sign-in stopped. Press Sign in when you are ready.")
+
+    def _show_cancel(self, waiting: bool):
+        self.cancel_sign_in_button.setVisible(waiting)
+        if not waiting:
+            self.copy_url_button.setVisible(False)
 
     def _on_sign_in_done(self, worked: bool, message: str):
+        was_cancelled = (
+            self.sign_in_worker is not None and self.sign_in_worker.cancelled
+        )
+        self._show_cancel(False)
         if worked:
-            # Other rows hang off these sign-ins, so re-check the lot.
-            self.start_checks()
+            # Other rows hang off these sign-ins, so re-check the lot. Forced,
+            # because a checks run already in flight would otherwise make
+            # start_checks return early and the row would stay red after a
+            # sign-in that worked.
+            self.start_checks(force=True)
+        elif was_cancelled:
+            pass   # already said so, and it is not a failure
         else:
             self.summary.setText(f"Sign-in did not finish: {message}")

@@ -657,3 +657,118 @@ def test_one_failure_names_it_and_nothing_else(qt_app):
 
     assert "One thing needs sorting out" in text
     assert "may clear up" not in text
+
+
+# --- getting unstuck from a sign-in ----------------------------------------------
+
+
+class _FakeSignIn:
+    """A sign-in that is running and has produced an address."""
+
+    def __init__(self, url="https://glean.example/authorize?x=1", running=True):
+        self.url = url
+        self._running = running
+        self.cancelled = False
+
+    def isRunning(self):
+        return self._running
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def test_pressing_sign_in_again_reopens_the_same_page(qt_app, monkeypatch):
+    """It used to do nothing at all, silently. Pressing it again is exactly
+    what somebody does when the browser opened on the wrong profile."""
+    import webbrowser
+
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+
+    view = SetupView()
+    try:
+        view.sign_in_worker = _FakeSignIn()
+        view._sign_in("glean")
+
+        assert opened == ["https://glean.example/authorize?x=1"]
+        assert "wrong" in view.summary.text()
+    finally:
+        view.deleteLater()
+
+
+def test_the_address_can_be_copied_for_another_profile(qt_app):
+    from PyQt6.QtWidgets import QApplication
+
+    view = SetupView()
+    try:
+        view._show_sign_in_url("https://glean.example/authorize?x=1")
+        assert view.copy_url_button.isHidden() is False
+
+        view._copy_sign_in_url()
+
+        assert QApplication.clipboard().text() == "https://glean.example/authorize?x=1"
+        assert "Paste it" in view.summary.text()
+    finally:
+        view.deleteLater()
+
+
+def test_waiting_can_be_stopped(qt_app):
+    view = SetupView()
+    try:
+        worker = _FakeSignIn()
+        view.sign_in_worker = worker
+        view._show_cancel(True)
+
+        view._cancel_sign_in()
+
+        assert worker.cancelled is True
+        assert view.cancel_sign_in_button.isHidden() is True
+        assert "stopped" in view.summary.text().lower()
+    finally:
+        view.deleteLater()
+
+
+def test_stopping_is_not_reported_as_a_failure(qt_app):
+    """Telling somebody their sign-in failed when they cancelled it is both
+    wrong and alarming."""
+    view = SetupView()
+    try:
+        worker = _FakeSignIn()
+        worker.cancelled = True
+        view.sign_in_worker = worker
+        view.summary.setText("Sign-in stopped. Press Sign in when you are ready.")
+
+        view._on_sign_in_done(False, "The sign-in did not finish.")
+
+        assert "did not finish" not in view.summary.text()
+    finally:
+        view.deleteLater()
+
+
+def test_a_real_failure_is_still_reported(qt_app):
+    view = SetupView()
+    try:
+        view.sign_in_worker = _FakeSignIn(running=False)
+
+        view._on_sign_in_done(False, "no route to host")
+
+        assert "no route to host" in view.summary.text()
+    finally:
+        view.deleteLater()
+
+
+def test_a_successful_sign_in_rechecks_even_mid_run(qt_app, monkeypatch):
+    """start_checks returns early when a run is in flight, so a sign-in that
+    worked while the person had pressed Check again left the row red."""
+    view = SetupView()
+    try:
+        forced = {}
+        monkeypatch.setattr(view, "start_checks",
+                            lambda only=None, force=False: forced.update(force=force))
+        view.sign_in_worker = _FakeSignIn(running=False)
+
+        view._on_sign_in_done(True, "")
+
+        assert forced.get("force") is True
+    finally:
+        view.deleteLater()
