@@ -330,3 +330,39 @@ def test_speakers_claiming_nothing_are_not_in_the_merge_map():
     found = [attribution.Suggestion("Speaker 1", name="Anya")]
 
     assert attribution.merges(found) == {}
+
+
+# --- when a guess would be a coin toss ------------------------------------------
+
+
+def test_a_confident_suggestion_is_worth_filling_in():
+    Suggestion = attribution.Suggestion
+
+    assert Suggestion("Speaker 1", name="Marcus", confidence="high").worth_filling_in
+    assert Suggestion("Speaker 1", name="Marcus", confidence="medium").worth_filling_in
+
+
+def test_a_low_confidence_suggestion_is_not():
+    Suggestion = attribution.Suggestion
+    """Three runs of the same recording with identical diarization returned
+    Anya, Anya, then Devan for the 22-second speaker. The answer flips, so it
+    must not arrive looking like the confident ones."""
+    assert not Suggestion("Speaker 4", name="Anya", confidence="low").worth_filling_in
+
+
+def test_an_unstated_confidence_is_not_a_high_one():
+    Suggestion = attribution.Suggestion
+
+    assert not Suggestion("Speaker 1", name="Marcus").worth_filling_in
+
+
+def test_no_name_is_never_worth_filling_in():
+    Suggestion = attribution.Suggestion
+
+    assert not Suggestion("Speaker 1", name="", confidence="high").worth_filling_in
+
+
+def test_claude_is_told_that_choosing_between_two_people_is_not_knowing():
+    """It returned a low-confidence name rather than an empty one, which is
+    the behaviour this instruction exists to change."""
+    assert "choosing between two people" in attribution.SYSTEM

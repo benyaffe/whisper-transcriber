@@ -76,7 +76,17 @@ class SpeakerRow(QFrame):
         top.addWidget(self.play)
         layout.addLayout(top)
 
-        if self.voice.is_slight:
+        self.asking = suggestion is not None and not suggestion.worth_filling_in
+
+        if self.asking:
+            # Said plainly, because this row is the one that needs a person and
+            # the three above it do not. A guess left in the box here reads
+            # exactly like the confident ones and gets accepted with them.
+            prompt = QLabel("Who is this? The recording does not make it clear.")
+            prompt.setWordWrap(True)
+            role(prompt, "danger")
+            layout.addWidget(prompt)
+        elif self.voice.is_slight:
             warning = QLabel(
                 "This voice barely speaks. It is often the transcriber inventing a "
                 "person, so it may belong to somebody already named above."
@@ -94,14 +104,20 @@ class SpeakerRow(QFrame):
         row = QHBoxLayout()
         row.addWidget(QLabel("Name"))
         self.name = QLineEdit()
-        self.name.setPlaceholderText("Leave blank if you are not sure")
-        if suggestion and suggestion.name:
+        self.name.setPlaceholderText(
+            "Type a name, or leave blank" if self.asking
+            else "Leave blank if you are not sure"
+        )
+        if suggestion and suggestion.worth_filling_in:
             self.name.setText(suggestion.name)
         row.addWidget(self.name, 1)
         layout.addLayout(row)
 
         if suggestion and suggestion.evidence:
-            why = QLabel(suggestion.evidence)
+            why = QLabel(
+                f"Best guess, not confident enough to fill in: {suggestion.evidence}"
+                if self.asking else suggestion.evidence
+            )
             why.setWordWrap(True)
             role(why, "faint")
             layout.addWidget(why)
@@ -484,11 +500,21 @@ class WriteUpView(QWidget):
     # --- internals ------------------------------------------------------------
 
     def _count_unnamed(self):
+        """Keep the button honest about what pressing it will do.
+
+        Leaving a voice unnamed is allowed and sometimes right, but it should
+        be a thing somebody chose rather than a thing they did not notice. The
+        button says which one it is.
+        """
         missing = sum(1 for row in self._rows if not row.chosen)
         self.unnamed.setText(
             "" if not missing
-            else f"{missing} voice{'s' if missing != 1 else ''} left unnamed, which is fine "
-                 f"if you are not sure."
+            else f"{missing} voice{'s' if missing != 1 else ''} will stay unnamed in the "
+                 f"documents."
+        )
+        self.confirm.setText(
+            "Use these names" if not missing
+            else f"Continue with {missing} unnamed"
         )
 
     def _confirm(self):

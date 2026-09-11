@@ -66,6 +66,10 @@ One entry per label you were given, using the label exactly as it was given to y
   - "name" is the person's real name, or "" if you genuinely cannot tell. An empty name is a
     good answer when the evidence is not there; a plausible guess is not, because a name here
     is published against somebody's words.
+  - **If you are choosing between two people, you do not know.** Return "" for the name and
+    say in the evidence who the candidates are and what would tell them apart. Naming your
+    marginal preference is worse than saying nothing, because the person reviewing cannot see
+    that it was marginal and will simply accept it.
   - "confidence" is high, medium or low.
   - "evidence" is one or two sentences saying what convinced you, quoting the recording where
     you can.
@@ -102,6 +106,18 @@ class Suggestion:
     confidence: str = ""
     evidence: str = ""
     same_as: str = ""
+
+    @property
+    def worth_filling_in(self) -> bool:
+        """Whether this is good enough to put in the box for somebody.
+
+        A low-confidence guess is not. Measured across three runs of the same
+        recording, the 22-second phantom speaker came back as Anya, Anya and then
+        Devan, from identical diarization: the answer flips between runs. Put
+        in the box it looks exactly like the three confident ones above it and
+        gets accepted with them, so the box stays empty and the row asks.
+        """
+        return bool(self.name) and self.confidence in ("high", "medium")
 
 
 def voices(payload: dict, sample_lines: int = SAMPLE_LINES) -> list:

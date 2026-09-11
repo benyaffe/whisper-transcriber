@@ -64,8 +64,8 @@ def test_confirming_emits_only_the_names_that_were_filled_in(view):
     """A voice left blank stays unnamed. Submitting the suggestion for it would
     defeat the guarantee the attribution module makes underneath."""
     view.ask_speakers(VOICES, [
-        Suggestion("Speaker 1", name="Marcus Ellery"),
-        Suggestion("Speaker 2", name="Anya Petrov-Hale"),
+        Suggestion("Speaker 1", name="Marcus Ellery", confidence="high"),
+        Suggestion("Speaker 2", name="Anya Petrov-Hale", confidence="high"),
     ])
     view._rows[1].name.setText("   ")
 
@@ -77,7 +77,7 @@ def test_confirming_emits_only_the_names_that_were_filled_in(view):
 
 
 def test_typing_over_a_suggestion_wins(view):
-    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Wrong Person")])
+    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Wrong Person", confidence="high")])
     view._rows[0].name.setText("Marcus Ellery")
 
     got = {}
@@ -88,18 +88,20 @@ def test_typing_over_a_suggestion_wins(view):
 
 
 def test_the_count_of_unnamed_voices_is_shown(view):
-    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Marcus")])
+    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Marcus", confidence="high")])
 
-    assert "1 voice left unnamed" in view.unnamed.text()
+    assert "1 voice will stay unnamed" in view.unnamed.text()
+    assert view.confirm.text() == "Continue with 1 unnamed"
 
 
 def test_no_count_is_shown_once_everything_is_named(view):
     view.ask_speakers(VOICES, [
-        Suggestion("Speaker 1", name="Marcus"),
-        Suggestion("Speaker 2", name="Anya"),
+        Suggestion("Speaker 1", name="Marcus", confidence="high"),
+        Suggestion("Speaker 2", name="Anya", confidence="high"),
     ])
 
     assert view.unnamed.text() == ""
+    assert view.confirm.text() == "Use these names"
 
 
 def test_a_barely_speaking_voice_is_called_out(view):
@@ -467,3 +469,80 @@ def test_a_map_with_no_corrections_is_still_reviewable(view):
 
     assert view.panes.currentIndex() == PANE_CONTEXT
     assert view._corrections == []
+
+
+# --- asking, when a guess would be a coin toss ----------------------------------
+
+
+def _unsure(label="Speaker 4"):
+    return Suggestion(label, name="Anya Petrov-Hale", confidence="low",
+                      evidence="Only backchannels, could be Anya or Devan.")
+
+
+def test_a_low_confidence_guess_is_not_filled_in(view):
+    """Across three runs of the same recording with identical diarization, the
+    22-second speaker came back Anya, Anya, then Devan. In the box it looks the
+    same as the three confident rows above it and gets accepted with them."""
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8, share=0.01)], [_unsure()])
+
+    assert view._rows[0].chosen == ""
+
+
+def test_the_row_asks_outright(view):
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8, share=0.01)], [_unsure()])
+
+    texts = [c.text() for c in view._rows[0].findChildren(type(view.unnamed))]
+    assert any("Who is this?" in t for t in texts)
+
+
+def test_the_guess_is_still_offered_as_a_hint(view):
+    """Withholding it entirely would throw away the only lead there is."""
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8, share=0.01)], [_unsure()])
+
+    texts = " ".join(c.text() for c in view._rows[0].findChildren(type(view.unnamed)))
+    assert "not confident enough to fill in" in texts
+    assert "could be Anya or Devan" in texts
+
+
+def test_a_confident_guess_is_still_filled_in(view):
+    view.ask_speakers([_voice("Speaker 1")],
+                      [Suggestion("Speaker 1", name="Marcus Ellery", confidence="high")])
+
+    assert view._rows[0].chosen == "Marcus Ellery"
+    assert view._rows[0].asking is False
+
+
+def test_a_suggestion_with_no_stated_confidence_is_not_trusted(view):
+    """An absent confidence is not a high one. Treating it as fillable would
+    make the safest default the one nobody wrote down."""
+    view.ask_speakers([_voice("Speaker 1")], [Suggestion("Speaker 1", name="Marcus Ellery")])
+
+    assert view._rows[0].chosen == ""
+
+
+def test_typing_a_name_answers_the_question(view):
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8)], [_unsure()])
+    view._rows[0].name.setText("Anya Petrov-Hale")
+
+    got = {}
+    view.speakers_confirmed.connect(got.update)
+    view._confirm()
+
+    assert got == {"Speaker 4": "Anya Petrov-Hale"}
+
+
+def test_carrying_on_without_answering_is_a_deliberate_act(view):
+    """Leaving it blank is allowed and sometimes right, but the button says
+    which of the two things pressing it does."""
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8)], [_unsure()])
+
+    assert view.confirm.text() == "Continue with 1 unnamed"
+    assert "will stay unnamed in the documents" in view.unnamed.text()
+
+
+def test_the_button_goes_back_once_the_question_is_answered(view):
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8)], [_unsure()])
+
+    view._rows[0].name.setText("Anya Petrov-Hale")
+
+    assert view.confirm.text() == "Use these names"
