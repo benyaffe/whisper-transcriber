@@ -643,3 +643,23 @@ def test_the_earlier_rewrites_are_not_worth_interrupting_for(window, monkeypatch
 
     assert shown == []
     assert _FakeWorker.started == ["revise"]
+
+
+def test_the_people_the_search_found_reach_the_speaker_screen(window):
+    """The context map is where the names are, and the speaker screen is the
+    only place they are asked for. Without this the combo box is offered an
+    empty list, which is a text field with extra steps."""
+    from src.podcastnotes.context import ContextMap
+
+    window.writeup.context_map = ContextMap(
+        people=[{"name": "Anya Petrov-Hale"}, {"name": "Miles Nadeau"}],
+    )
+    seen = {}
+    window.writeup_view.ask_speakers = lambda voices, suggestions=None, names=(): (
+        seen.update(names=list(names))
+    )
+    _FakeWorker.results = {"speakers": []}
+
+    window._run_step("speakers")
+
+    assert seen["names"] == ["Anya Petrov-Hale", "Miles Nadeau"]

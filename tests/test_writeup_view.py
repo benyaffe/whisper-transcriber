@@ -68,7 +68,7 @@ def test_confirming_emits_only_the_names_that_were_filled_in(view):
         Suggestion("Speaker 1", name="Marcus Ellery", confidence="high"),
         Suggestion("Speaker 2", name="Anya Petrov-Hale", confidence="high"),
     ])
-    view._rows[1].name.setText("   ")
+    view._rows[1].name.setCurrentText("   ")
 
     got = {}
     view.speakers_confirmed.connect(got.update)
@@ -79,7 +79,7 @@ def test_confirming_emits_only_the_names_that_were_filled_in(view):
 
 def test_typing_over_a_suggestion_wins(view):
     view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Wrong Person", confidence="high")])
-    view._rows[0].name.setText("Marcus Ellery")
+    view._rows[0].name.setCurrentText("Marcus Ellery")
 
     got = {}
     view.speakers_confirmed.connect(got.update)
@@ -457,7 +457,7 @@ def test_a_suggestion_with_no_stated_confidence_is_not_trusted(view):
 
 def test_typing_a_name_answers_the_question(view):
     view.ask_speakers([_voice("Speaker 4", seconds=21.8)], [_unsure()])
-    view._rows[0].name.setText("Anya Petrov-Hale")
+    view._rows[0].name.setCurrentText("Anya Petrov-Hale")
 
     got = {}
     view.speakers_confirmed.connect(got.update)
@@ -478,7 +478,7 @@ def test_carrying_on_without_answering_is_a_deliberate_act(view):
 def test_the_button_goes_back_once_the_question_is_answered(view):
     view.ask_speakers([_voice("Speaker 4", seconds=21.8)], [_unsure()])
 
-    view._rows[0].name.setText("Anya Petrov-Hale")
+    view._rows[0].name.setCurrentText("Anya Petrov-Hale")
 
     assert view.confirm.text() == "Use these names"
 
@@ -988,3 +988,102 @@ def test_the_progress_bar_is_as_wide_as_the_prose_it_sits_with(view):
 
     assert view.bar.width() == READABLE_WIDTH
     assert view.findings.width() == READABLE_WIDTH
+
+
+# --- offering a name rather than a blank field -----------------------------------
+
+
+PEOPLE = ["Anya Petrov-Hale", "Marcus Ellery", "Miles Nadeau"]
+
+
+def test_the_people_the_search_found_are_on_offer(view):
+    """Almost every voice on a work recording is one of them, and recognising
+    "Anya Petrov-Hale" is easier than spelling it from memory."""
+    view.ask_speakers([_voice("Speaker 1")], names=PEOPLE)
+
+    box = view._rows[0].name
+    assert [box.itemText(i) for i in range(box.count())] == [""] + PEOPLE
+
+
+def test_blank_is_the_first_option_and_the_one_it_starts_on(view):
+    """Leaving a voice unnamed has to be something you choose rather than
+    something you clear, and nothing should be selected by accident because the
+    list happened to open on it."""
+    view.ask_speakers([_voice("Speaker 1")], names=PEOPLE)
+
+    assert view._rows[0].name.currentText() == ""
+    assert view._rows[0].chosen == ""
+
+
+def test_a_name_it_has_never_heard_of_can_still_be_typed(view):
+    """The list is never complete. A recording can contain somebody the company
+    has never written down, and a closed list would make them unnameable."""
+    view.ask_speakers([_voice("Speaker 1")], names=PEOPLE)
+
+    view._rows[0].name.setCurrentText("Idris Vahali")
+
+    assert view._rows[0].chosen == "Idris Vahali"
+
+
+def test_typing_does_not_add_to_the_list(view):
+    """Left on Qt's default, an abandoned half-typed name becomes a permanent
+    option, and the next row down offers "Anya Pe" beside "Anya Petrov-Hale"."""
+    view.ask_speakers([_voice("Speaker 1")], names=PEOPLE)
+    box = view._rows[0].name
+    before = box.count()
+
+    # Enter is what makes Qt insert on the default policy, so pressing it is
+    # the only way this is actually tested.
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    box.setCurrentText("Anya Pe")
+    QTest.keyClick(box.lineEdit(), Qt.Key.Key_Return)
+
+    assert box.count() == before
+    assert "Anya Pe" not in [box.itemText(i) for i in range(box.count())]
+
+
+def test_the_rows_own_suggestion_leads_the_list(view):
+    view.ask_speakers(
+        [_voice("Speaker 1")],
+        [Suggestion("Speaker 1", name="Anya Petrov-Hale", confidence="high")],
+        names=PEOPLE,
+    )
+
+    assert view._rows[0].name.itemText(1) == "Anya Petrov-Hale"
+
+
+def test_a_name_is_offered_once_however_many_places_it_came_from(view):
+    view.ask_speakers(
+        [_voice("Speaker 1")],
+        [Suggestion("Speaker 1", name="Anya Petrov-Hale", confidence="high")],
+        names=["anya petrov-hale", "Marcus Ellery"],
+    )
+
+    box = view._rows[0].name
+    assert [box.itemText(i) for i in range(box.count())] == [
+        "", "Anya Petrov-Hale", "Marcus Ellery",
+    ]
+
+
+def test_a_guess_it_is_unsure_of_is_offered_but_not_chosen(view):
+    """The rule the whole screen turns on. Being offered a guess to accept is a
+    different thing from having it accepted for you, and Speaker 4 came back as
+    a different person on two runs of identical diarization."""
+    view.ask_speakers([_voice("Speaker 4")], [_unsure("Speaker 4")], names=PEOPLE)
+
+    box = view._rows[0].name
+    assert box.currentText() == ""
+    assert "Anya Petrov-Hale" in [box.itemText(i) for i in range(box.count())]
+
+
+def test_choosing_from_the_list_counts_as_naming_the_voice(view):
+    """The unnamed count is driven by the field, so a combo that reports
+    through a different signal leaves the button saying "continue with 1
+    unnamed" after the name has been picked."""
+    view.ask_speakers([_voice("Speaker 1")], names=PEOPLE)
+
+    view._rows[0].name.setCurrentIndex(1)
+
+    assert "unnamed" not in view.confirm.text()

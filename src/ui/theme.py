@@ -37,6 +37,9 @@ changes a border *width* reflows the control, so every focus style here keeps
 the width and changes only the colour.
 """
 
+import os
+import tempfile
+
 from PyQt6.QtWidgets import QWidget
 
 TOKENS = {
@@ -161,7 +164,14 @@ QLineEdit[role="title"] {{
     padding: {space_3};
 }}
 
+/* Styling a QComboBox at all makes Qt stop painting the native control, so
+   without an arrow the box has no affordance whatsoever and reads as a plain
+   text field: the list is there and nothing on screen says so. Found by
+   rendering it. The image is drawn from the palette rather than shipped, so
+   the arrow cannot be the one thing that ignores a colour change here, and so
+   there is no asset for the packaging step to leave behind. */
 QComboBox::drop-down {{ border: none; width: {space_6}; }}
+QComboBox::down-arrow {{ image: url("{chevron}"); width: {space_3}; height: {space_3}; }}
 QComboBox QAbstractItemView {{
     background: {surface};
     border: 1px solid {border};
@@ -353,8 +363,60 @@ a.ts {{
 """
 
 
+def chevron(colour: str = "", where: str = "") -> str:
+    """Draw the combo box arrow, and give back a path QSS can point at.
+
+    Generated rather than bundled. The alternative is an SVG in the repo that
+    quietly keeps its own colour when the palette changes, plus one more file
+    for PyInstaller to forget.
+
+    Returns "" when there is no QApplication, which is the case in the tests
+    that only read the sheet. A `url("")` is ignored by Qt, so the sheet still
+    builds and the only thing missing is a picture nothing is looking at.
+    """
+    from PyQt6.QtCore import QPointF, Qt
+    from PyQt6.QtGui import QGuiApplication, QPainter, QPen, QPixmap
+
+    if QGuiApplication.instance() is None:
+        return ""
+
+    colour = colour or TOKENS["text_muted"]
+    # Drawn at 2x so it is not soft on a Retina display, which is every Mac
+    # this runs on.
+    size, scale = 12, 2
+    image = QPixmap(size * scale, size * scale)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(_colour(colour))
+    pen.setWidth(2 * scale)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.drawPolyline([
+        QPointF(3.5 * scale, 5 * scale),
+        QPointF(6 * scale, 7.5 * scale),
+        QPointF(8.5 * scale, 5 * scale),
+    ])
+    painter.end()
+
+    where = where or os.path.join(
+        tempfile.gettempdir(), f"podcastnotes-chevron-{colour.lstrip('#')}.png"
+    )
+    image.save(where, "PNG")
+    # Forward slashes, because a QSS url() on Windows reads a backslash as an
+    # escape. Harmless on macOS and one less thing to find out later.
+    return where.replace("\\", "/")
+
+
+def _colour(value: str):
+    from PyQt6.QtGui import QColor
+
+    return QColor(value)
+
+
 def stylesheet() -> str:
-    return STYLESHEET.format(**TOKENS)
+    return STYLESHEET.format(chevron=chevron(), **TOKENS)
 
 
 def document_stylesheet() -> str:

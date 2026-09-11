@@ -25,7 +25,7 @@ import os
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QStackedWidget, QTextBrowser, QVBoxLayout,
     QWidget,
 )
@@ -54,13 +54,13 @@ class SpeakerRow(QFrame):
 
     play_requested = pyqtSignal(float)
 
-    def __init__(self, voice, suggestion=None, parent=None):
+    def __init__(self, voice, suggestion=None, names=(), parent=None):
         super().__init__(parent)
         self.voice = voice
         role(self, "card")
-        self._build(suggestion)
+        self._build(suggestion, names)
 
-    def _build(self, suggestion):
+    def _build(self, suggestion, names=()):
         layout = QVBoxLayout(self)
         layout.setSpacing(6)
 
@@ -105,15 +105,33 @@ class SpeakerRow(QFrame):
             role(quote, "faint")
             layout.addWidget(quote)
 
+        # A list of the people the background search already found, because
+        # almost every voice on a work recording is one of them, and typing
+        # "Anya Petrov-Hale" correctly from memory is harder than recognising
+        # it. Editable, because the list is never complete: the recording can
+        # contain somebody the company has never written down.
         row = QHBoxLayout()
         row.addWidget(QLabel("Name"))
-        self.name = QLineEdit()
-        self.name.setPlaceholderText(
-            "Type a name, or leave blank" if self.asking
+        self.name = QComboBox()
+        self.name.setEditable(True)
+        # Nothing is added to the list by typing. Left on the default, an
+        # abandoned half-typed name becomes a permanent option on every other
+        # row on the screen.
+        self.name.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        # Blank first, so leaving a voice unnamed is a thing you choose rather
+        # than a thing you have to clear, and so no name is selected by
+        # accident when the list happens to open on one.
+        self.name.addItem("")
+        for candidate in _offer(names, suggestion):
+            self.name.addItem(candidate)
+        self.name.lineEdit().setPlaceholderText(
+            "Pick a name, type one, or leave blank" if self.asking
             else "Leave blank if you are not sure"
         )
         if suggestion and suggestion.worth_filling_in:
-            self.name.setText(suggestion.name)
+            # The rule the whole screen turns on: a guess the recording does
+            # not support is offered in the list but never pre-selected.
+            self.name.setCurrentText(suggestion.name)
         row.addWidget(self.name, 1)
         layout.addLayout(row)
 
@@ -131,7 +149,29 @@ class SpeakerRow(QFrame):
 
     @property
     def chosen(self) -> str:
-        return self.name.text().strip()
+        return self.name.currentText().strip()
+
+
+def _offer(names, suggestion) -> list:
+    """The names to put in the list, best first and each of them once.
+
+    The row's own suggestion leads, including the low-confidence one it is
+    refusing to pre-select, because being offered a guess to accept is a
+    different thing from having it accepted for you. The rest follow in the
+    order the research found them, which is roughly how central each person is
+    to the trip.
+    """
+    ordered = []
+    if suggestion and (suggestion.name or "").strip():
+        ordered.append(suggestion.name.strip())
+    ordered += [str(n).strip() for n in names if str(n).strip()]
+
+    seen, out = set(), []
+    for name in ordered:
+        if name.casefold() not in seen:
+            seen.add(name.casefold())
+            out.append(name)
+    return out
 
 
 class _Readable(QTextBrowser):
@@ -612,16 +652,16 @@ class WriteUpView(QWidget):
         self.detail.setText("")
         self.panes.setCurrentIndex(PANE_WAITING)
 
-    def ask_speakers(self, voices: list, suggestions: list = None):
+    def ask_speakers(self, voices: list, suggestions: list = None, names=()):
         by_label = {s.speaker: s for s in (suggestions or [])}
         for row in self._rows:
             row.setParent(None)
         self._rows = []
 
         for voice in voices:
-            row = SpeakerRow(voice, by_label.get(voice.speaker))
+            row = SpeakerRow(voice, by_label.get(voice.speaker), names=names)
             row.play_requested.connect(self._play_one)
-            row.name.textChanged.connect(self._count_unnamed)
+            row.name.currentTextChanged.connect(self._count_unnamed)
             self._speaker_layout.insertWidget(self._speaker_layout.count() - 1, row)
             self._rows.append(row)
 

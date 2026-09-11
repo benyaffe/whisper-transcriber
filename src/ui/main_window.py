@@ -347,7 +347,14 @@ class MainWindow(QMainWindow):
             self._run_step("speakers")
         elif step == "speakers":
             self.writeup_view.ask_speakers(
-                self.writeup.voices(), suggestions=result or []
+                self.writeup.voices(),
+                suggestions=result or [],
+                # Almost every voice on a work recording is somebody the
+                # background search already found, so the common case should be
+                # one click rather than spelling "Anya Petrov-Hale" from memory.
+                names=[
+                    p.get("name") for p in (self.writeup.context_map.people or [])
+                ],
             )
         elif step == "answers":
             self._run_step("questions")

@@ -239,6 +239,49 @@ def test_a_ring_has_somewhere_to_be_drawn():
         )
 
 
+# --- the combo box arrow ----------------------------------------------------------
+
+
+def test_a_combo_box_says_it_is_one(qt_app):
+    """Styling a QComboBox at all makes Qt stop painting the native control, so
+    the speaker name box had no affordance whatsoever: a list of seven people
+    behind something that looked exactly like a text field. Rendered and
+    caught."""
+    assert "QComboBox::down-arrow" in theme.STYLESHEET
+
+    built = theme.stylesheet()
+    assert 'image: url("")' not in built, "no arrow was drawn"
+
+
+def test_the_arrow_is_drawn_in_the_palette_colour(qt_app, tmp_path):
+    """Otherwise it is the one thing on the screen that keeps its own colour
+    when the theme changes, which is what this whole file exists to prevent."""
+    from PyQt6.QtGui import QColor, QImage
+
+    where = str(tmp_path / "arrow.png")
+    theme.chevron("#c02a20", where=where)
+    image = QImage(where)
+
+    used = {
+        QColor(image.pixel(x, y)).name()
+        for x in range(image.width()) for y in range(image.height())
+        if QColor.fromRgba(image.pixel(x, y)).alpha() > 200
+    }
+    assert used, "nothing was drawn"
+    assert used <= {"#c02a20"}, sorted(used)
+
+
+def test_the_sheet_still_builds_without_a_running_application(monkeypatch):
+    """The packaging checks and half the tests read the sheet with no
+    QApplication, and a QPixmap cannot be made without one."""
+    from PyQt6.QtGui import QGuiApplication
+
+    monkeypatch.setattr(QGuiApplication, "instance", staticmethod(lambda: None))
+
+    assert theme.chevron() == ""
+    theme.stylesheet()
+
+
 # --- the sheet stays buildable ----------------------------------------------------
 
 
