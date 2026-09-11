@@ -135,6 +135,8 @@ class IntakeView(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Read from the Keychain on first use, not on every keystroke.
+        self._token_cache = None
         self._build()
         self._refresh()
 
@@ -319,11 +321,47 @@ class IntakeView(QWidget):
         allowed, message = check_duration(*self._duration())
         return message if allowed else ""
 
-    @staticmethod
-    def _hf_token() -> str:
-        from src.core.config import get_hf_token
+    def _hint_text(self) -> str:
+        """What to say under the form, computed once.
 
-        return get_hf_token()
+        `self._problem() or self._advisory()` reads well and costs double: on a
+        valid form the problem check runs the duration scan, finds nothing to
+        complain about, and then the advisory runs exactly the same scan again.
+        With that scan spawning an ffprobe per recording, the difference is two
+        subprocesses per file rather than one, on every keystroke.
+        """
+        if not self.name_input.text().strip():
+            return "Give the trip a name."
+        if not self.recordings.sources():
+            return "Add at least one recording."
+        if self.speakers_checkbox.isChecked() and not self._hf_token():
+            return (
+                "Naming speakers needs a HuggingFace token, which is not set up "
+                "yet. Add one in Accounts, or untick Name the speakers."
+            )
+        if not self.speakers_checkbox.isChecked():
+            return ""
+        # One scan, and both answers come out of it.
+        allowed, message = check_duration(*self._duration())
+        return message
+
+    def _hf_token(self) -> str:
+        """The stored token, read once rather than once per keystroke.
+
+        `get_hf_token` is a Keychain round trip. On the validation path that put
+        one macOS IPC call between every character typed and the character
+        appearing. Nothing can change it while this screen has focus except the
+        Accounts dialog, which calls `forget_hf_token` on the way out.
+        """
+        if self._token_cache is None:
+            from src.core.config import get_hf_token
+
+            self._token_cache = get_hf_token()
+        return self._token_cache
+
+    def forget_hf_token(self):
+        """Drop the cached token, for when somebody has just changed it."""
+        self._token_cache = None
 
     def _refresh(self):
         # The button stays enabled with no name or no recordings, because a
@@ -337,7 +375,7 @@ class IntakeView(QWidget):
         if not has_any:
             self.hint.setText("")
             return
-        self.hint.setText(self._problem() or self._advisory())
+        self.hint.setText(self._hint_text())
 
     def _report_problem(self, problem: str):
         """Tell the operator why nothing happened.

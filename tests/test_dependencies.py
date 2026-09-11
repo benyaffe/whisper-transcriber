@@ -264,3 +264,76 @@ def test_changing_a_token_moves_the_transcript_pane_too(monkeypatch):
     monkeypatch.setitem(theme.TOKENS, "accent", "#ff0000")
 
     assert "#ff0000" in theme.document_stylesheet()
+
+
+# --- probing a media file is memoised --------------------------------------------
+
+
+def test_the_same_file_is_only_probed_once(tmp_path, monkeypatch):
+    """It spawns a subprocess, and the intake screen asks for the same files
+    over and over while somebody types a trip name."""
+    import subprocess
+
+    from src.utils import file_utils
+
+    media = tmp_path / "a.m4a"
+    media.write_bytes(b"pretend")
+    file_utils._FILE_INFO.clear()
+
+    calls = []
+    monkeypatch.setattr(file_utils, "_probe", lambda p: (calls.append(p), {"duration": 5})[1])
+
+    file_utils.get_file_info(str(media))
+    file_utils.get_file_info(str(media))
+    file_utils.get_file_info(str(media))
+
+    assert len(calls) == 1
+
+
+def test_a_file_that_changed_on_disk_is_probed_again(tmp_path, monkeypatch):
+    """Keyed on size and modification time, not the path alone, so replacing a
+    recording does not get answered from a stale entry."""
+    from src.utils import file_utils
+
+    media = tmp_path / "a.m4a"
+    media.write_bytes(b"first")
+    file_utils._FILE_INFO.clear()
+
+    calls = []
+    monkeypatch.setattr(file_utils, "_probe", lambda p: (calls.append(p), {"duration": 5})[1])
+
+    file_utils.get_file_info(str(media))
+    media.write_bytes(b"a different recording entirely")
+    file_utils.get_file_info(str(media))
+
+    assert len(calls) == 2
+
+
+def test_an_unreadable_file_is_not_cached(tmp_path, monkeypatch):
+    """It may be readable in a moment; caching the failure would outlast it."""
+    from src.utils import file_utils
+
+    file_utils._FILE_INFO.clear()
+    calls = []
+    monkeypatch.setattr(file_utils, "_probe", lambda p: (calls.append(p), {"duration": 0})[1])
+
+    missing = str(tmp_path / "gone.m4a")
+    file_utils.get_file_info(missing)
+    file_utils.get_file_info(missing)
+
+    assert len(calls) == 2
+
+
+def test_the_caller_cannot_corrupt_the_cache(tmp_path, monkeypatch):
+    """A dict handed out by reference is a dict somebody will mutate."""
+    from src.utils import file_utils
+
+    media = tmp_path / "a.m4a"
+    media.write_bytes(b"pretend")
+    file_utils._FILE_INFO.clear()
+    monkeypatch.setattr(file_utils, "_probe", lambda p: {"duration": 5})
+
+    first = file_utils.get_file_info(str(media))
+    first["duration"] = 9999
+
+    assert file_utils.get_file_info(str(media))["duration"] == 5

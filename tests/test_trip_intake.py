@@ -376,3 +376,86 @@ def test_the_list_grows_with_its_contents_up_to_a_limit(qt_app, tmp_path):
         assert listing.height() == cap
     finally:
         listing.deleteLater()
+
+
+# --- typing must not touch the disk or the Keychain ------------------------------
+
+
+def test_typing_a_name_spawns_no_subprocess(view, audio_files, monkeypatch):
+    """The lag. Every keystroke ran the validation, which probed each recording
+    with ffprobe, and then ran the whole scan a second time because the hint was
+    `self._problem() or self._advisory()` and both call it. Two subprocess
+    spawns per file per character, on the GUI thread."""
+    import subprocess
+
+    ready(view, sources=audio_files)
+    view._hint_text()                       # warm the caches, as real use does
+
+    spawned = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: spawned.append(a))
+
+    for character in "Ashford hospital tour":
+        view.name_input.setText(view.name_input.text() + character)
+
+    assert spawned == [], f"{len(spawned)} subprocesses while typing"
+
+
+def test_typing_a_name_reads_the_keychain_once_at_most(view, audio_files, monkeypatch):
+    """`get_hf_token` is a macOS Keychain round trip, and it sat between every
+    character typed and that character appearing."""
+    from src.ui.podcastnotes.intake_view import IntakeView
+
+    reads = []
+    monkeypatch.setattr(IntakeView, "_hf_token",
+                        lambda self: (reads.append(1), "hf_test")[1] if not reads else "hf_test")
+    ready(view, sources=audio_files)
+
+    for character in "Ashford":
+        view.name_input.setText(view.name_input.text() + character)
+
+    assert len(reads) <= 1
+
+
+def test_the_duration_scan_runs_once_per_refresh(view, audio_files, monkeypatch):
+    """It used to run twice on a valid form: the problem check scanned, found
+    nothing to complain about, and the advisory scanned again for the same
+    answer."""
+    calls = []
+    real = view._duration
+    monkeypatch.setattr(view, "_duration", lambda: (calls.append(1), real())[1])
+    ready(view, sources=audio_files)
+
+    calls.clear()
+    view._hint_text()
+
+    assert len(calls) == 1
+
+
+def test_the_advice_still_appears_on_a_valid_form(view, audio_files, monkeypatch):
+    """Collapsing two passes into one must not lose the advisory, which is the
+    only thing that says a long trip will take a while."""
+    from src.ui.podcastnotes import intake_view as module
+
+    monkeypatch.setattr(module, "check_duration", lambda t, e: (True, "This will take a while."))
+    ready(view, sources=audio_files)
+
+    assert view._hint_text() == "This will take a while."
+
+
+def test_a_blocking_problem_still_wins_over_advice(view, audio_files, monkeypatch):
+    from src.ui.podcastnotes import intake_view as module
+
+    monkeypatch.setattr(module, "check_duration", lambda t, e: (False, "Too long."))
+    ready(view, sources=audio_files)
+
+    assert view._hint_text() == "Too long."
+
+
+def test_a_changed_token_can_be_picked_up(view, audio_files, monkeypatch):
+    """The cache has to be droppable, or changing the token in Accounts would
+    not take effect until the app restarted."""
+    view._token_cache = "stale"
+
+    view.forget_hf_token()
+
+    assert view._token_cache is None

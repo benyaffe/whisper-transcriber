@@ -185,7 +185,33 @@ def get_file_info(filepath: str) -> dict:
     """
     Get media file information using ffprobe.
     Returns dict with format, duration, codec info.
+
+    Memoised, because this spawns a subprocess and the intake screen asks it
+    for the same files repeatedly while somebody types a trip name. Keyed on
+    the path together with its size and modification time, so a file replaced
+    on disk is read again rather than answered from a stale entry.
     """
+    try:
+        stat = os.stat(filepath)
+        key = (filepath, stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        # Unreadable now, and possibly readable in a moment. Do not cache that.
+        return _probe(filepath)
+
+    cached = _FILE_INFO.get(key)
+    if cached is None:
+        cached = _probe(filepath)
+        _FILE_INFO[key] = cached
+    return dict(cached)
+
+
+# Small on purpose: a trip is a handful of recordings, and an unbounded cache
+# keyed on mtime would grow for the life of the process.
+_FILE_INFO = {}
+
+
+def _probe(filepath: str) -> dict:
+    """One ffprobe call. Everything above this is caching."""
     info = {
         'format': 'Unknown',
         'duration': 0,

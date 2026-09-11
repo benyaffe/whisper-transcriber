@@ -139,9 +139,15 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.setup_view)
 
     def _open_settings(self):
+        """Open Accounts, and let the intake screen know its cache is stale.
+
+        The intake screen reads the HuggingFace token once rather than on every
+        keystroke, so the one place that token can change has to say so.
+        """
         from src.ui.settings_dialog import SettingsDialog
 
         SettingsDialog(self).exec()
+        self.intake.forget_hf_token()
 
     # --- entry points ---------------------------------------------------------
 

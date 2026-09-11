@@ -54,7 +54,14 @@ class DropZone(QFrame):
         A full-height target is the right thing to offer an empty screen and
         the wrong thing to keep once it has been used, where it just pushes
         the actual content down.
+
+        Returns early when nothing has changed. It is called from the intake
+        screen's refresh, which runs on every keystroke, and a style unpolish
+        and repolish plus a layout invalidation per character is not free.
         """
+        if getattr(self, "_compact", None) == compact:
+            return
+        self._compact = compact
         self.sublabel.setVisible(not compact)
         self.label.setText("Add more" if compact else "Drop recordings here")
         role(self.label, "muted" if compact else "h2")
