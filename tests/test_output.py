@@ -363,3 +363,32 @@ def test_each_document_is_told_to_say_which_one_it_is():
     assert "Summary" in output.SUMMARY_SYSTEM
     assert "first-level heading" in output.TRANSCRIPT_SYSTEM
     assert "first-level heading" in output.SUMMARY_SYSTEM
+
+
+def test_what_the_person_said_about_the_draft_reaches_both_writers():
+    """Much of a revision note never becomes a substitution. "Site 3 was the
+    busiest" changes no words in the transcript and everything about the
+    summary, so if it does not reach the prompt it is lost entirely."""
+    shared = output._shared(
+        "Ashford", None, "Speaker 1: hello", output.HouseStyle(),
+        ["site 3 was the busiest", "and Kessler had left by then"],
+    )
+
+    assert "site 3 was the busiest" in shared
+    assert "and Kessler had left by then" in shared
+
+
+def test_the_later_note_is_marked_as_the_one_they_settled_on():
+    """Two passes often disagree, because the second is them correcting the
+    first. Order alone does not say which wins."""
+    shared = output._shared("", None, "s", output.HouseStyle(), ["a", "b"])
+
+    assert "the later one is what they settled on" in shared
+
+
+def test_a_first_pass_says_nothing_about_earlier_drafts():
+    """There was no earlier draft, and inviting the writer to reconcile with
+    one is an invitation to invent it."""
+    shared = output._shared("", None, "s", output.HouseStyle())
+
+    assert "earlier draft" not in shared

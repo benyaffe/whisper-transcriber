@@ -203,13 +203,14 @@ def write(
     boundaries: dict = None,
     style: HouseStyle = None,
     client=None,
+    revisions=(),
 ) -> Documents:
     """Both documents, in house style, with the markers intact."""
     style = style or HouseStyle()
     script = as_script(payload, boundaries)
     expected = _markers(script)
 
-    shared = _shared(description, context_map, script, style)
+    shared = _shared(description, context_map, script, style, revisions)
 
     transcript = agent.ask(
         shared + "\n\nProduce the reflowed transcript now.",
@@ -235,13 +236,30 @@ def write(
     )
 
 
-def _shared(description: str, context_map, script: str, style: HouseStyle) -> str:
+def _shared(description: str, context_map, script: str, style: HouseStyle,
+            revisions=()) -> str:
+    """Everything both writers see.
+
+    `revisions` is what the person said after reading an earlier draft, in the
+    order they said it. Much of it never becomes a substitution: "site 3 was
+    the busiest" changes no words in the transcript and everything about the
+    summary, and without this it would vanish entirely.
+    """
     open_questions = getattr(context_map, "open_questions", None) or []
+    said = ""
+    if revisions:
+        said = (
+            "\n\nWhat the person who was there said after reading an earlier draft, "
+            "in the order they said it, so where two disagree the later one is what "
+            "they settled on:\n"
+            + "\n".join(f"  - {note}" for note in revisions)
+        )
     return (
         f"Trip description:\n{description or '(none given)'}\n\n"
         f"House style, which is not negotiable:\n{style.rules()}\n\n"
         f"Questions nobody could resolve, so do not present them as settled:\n"
         + "\n".join(f"  - {q}" for q in open_questions)
+        + said
         + f"\n\nThe transcript. Speakers are already named and terms already corrected:\n\n{script}"
     )
 
