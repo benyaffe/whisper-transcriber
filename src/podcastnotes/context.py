@@ -46,6 +46,25 @@ SEARCH_TOOL_DESCRIPTION = (
     "write full sentences and do not use boolean operators."
 )
 
+# Said once, because two prompts depend on it and the correction stage is what
+# actually consumes it. A paraphrase in the second prompt is a paraphrase that
+# drifts out of step with `correct._proposals` without anything failing.
+SUBSTITUTION_RULES = """"likely_errors" is applied to the transcript by direct substitution, one
+row at a time, so every row must be atomic and independently substitutable. This matters more
+than it sounds:
+  - "heard" is the shortest run of words that is actually wrong, which is usually a single term
+    or name. Never a whole sentence. Never two different errors combined into one row: if a
+    sentence contains two mistakes, that is two rows.
+  - "probably" is exactly what replaces it and nothing else. Swapping one for the other must
+    leave a correct sentence and lose no words. Write "100 to 200", not "the figure should be
+    100 to 200" and not "they see 100 to 200 a day".
+  - Substitution happens inside a single transcript segment, and segments are short: the median
+    is about nine words. A span longer than a few words will usually straddle a boundary and
+    then match nothing at all, so the whole correction is lost. Prefer "Fairmont" to "St. Bede's
+    Fairmont at 22101 Fairmont Road".
+  - If one error appears in several wordings, separate them with " / " on both sides, in the
+    same order, so that each heard variant lines up with its own replacement."""
+
 SYSTEM = """You are assembling background context so that a garbled machine transcript of a work
 trip can be corrected accurately and written up.
 
@@ -67,24 +86,15 @@ Finish by returning ONLY a JSON object, with no prose and no code fence around i
   "hard_dates": [{"date", "what"}]
   "open_questions": [string]
 
-"likely_errors" is applied to the transcript by direct substitution, one row at a time, so every
-row must be atomic and independently substitutable. This matters more than it sounds:
-  - "heard" is the shortest run of words that is actually wrong, which is usually a single term
-    or name. Never a whole sentence. Never two different errors combined into one row: if a
-    sentence contains two mistakes, that is two rows.
-  - "probably" is exactly what replaces it and nothing else. Swapping one for the other must
-    leave a correct sentence and lose no words. Write "100 to 200", not "the figure should be
-    100 to 200" and not "they see 100 to 200 a day".
-  - Substitution happens inside a single transcript segment, and segments are short: the median
-    is about nine words. A span longer than a few words will usually straddle a boundary and
-    then match nothing at all, so the whole correction is lost. Prefer "Fairmont" to "St. Bede's
-    Fairmont at 22101 Fairmont Road".
-  - If one error appears in several wordings, separate them with " / " on both sides, in the
-    same order, so that each heard variant lines up with its own replacement.
+{substitution_rules}
 
 "confidence" is one of high, medium, low. Never invent a correction you found no evidence for.
 If you suspect something and cannot support it, put it in open_questions instead. An honest gap
 is useful; a confident wrong name is published and then repeated."""
+
+# A plain replace, not .format(): the prompt is full of JSON braces and
+# format() reads every one of them as a field.
+SYSTEM = SYSTEM.replace("{substitution_rules}", SUBSTITUTION_RULES)
 
 
 class GleanUnavailable(Exception):
@@ -154,18 +164,20 @@ class ContextMap:
         return cls.from_dict(json.loads(target.read_text()))
 
 
-def build(
-    description: str,
-    transcript: str,
+def research(
+    prompt: str,
+    system: str,
     max_searches: int = MAX_SEARCHES,
-    on_search=None,  # called (query, None) when a search starts, (query, n) when it returns
+    on_search=None,  # (query, None) when a search starts, (query, n) when it returns
     client=None,
     search=None,
-) -> ContextMap:
-    """Research the trip and return the map. Raises GleanUnavailable if it cannot.
+) -> tuple:
+    """Run the agentic Glean loop and return (the answer text, the queries run).
 
-    `search` is injectable so this can be tested without a Glean credential,
-    and so a caller can wrap it, for instance to filter results.
+    Extracted so a second pass gets the same three things rather than a copy of
+    them that drifts: the outage rule, the preflight before Claude is paid for
+    anything, and the distinction between a dead credential, which is fatal,
+    and a bad query, which is not.
     """
     search = search or glean.research
 
@@ -217,8 +229,8 @@ def build(
     )
 
     answer = agent.ask(
-        _prompt(description, transcript),
-        system=SYSTEM,
+        prompt,
+        system=system,
         tools=[tool],
         max_tool_calls=max_searches,
         client=client,
@@ -227,10 +239,126 @@ def build(
         # down, then answers from nothing.
         fatal=(GleanUnavailable,),
     )
+    return answer.text, searched
 
-    found = ContextMap.from_dict(_parse(answer.text))
+
+def build(
+    description: str,
+    transcript: str,
+    max_searches: int = MAX_SEARCHES,
+    on_search=None,
+    client=None,
+    search=None,
+) -> ContextMap:
+    """Research the trip and return the map. Raises GleanUnavailable if it cannot.
+
+    `search` is injectable so this can be tested without a Glean credential,
+    and so a caller can wrap it, for instance to filter results.
+    """
+    text, searched = research(
+        _prompt(description, transcript),
+        SYSTEM,
+        max_searches=max_searches,
+        on_search=on_search,
+        client=client,
+        search=search,
+    )
+    found = ContextMap.from_dict(_parse(text))
     found.searches = searched
     return found
+
+
+def _key(text) -> str:
+    """A comparison key for a name or a phrase: case and spacing do not count."""
+    return " ".join(str(text or "").split()).casefold()
+
+
+def merge(base: ContextMap, found: ContextMap, answered=()) -> ContextMap:
+    """Fold a second research pass into the first, losing nothing, repeating nothing.
+
+    The two passes know different amounts. The first read the whole transcript
+    cold. The second was seeded by a sentence somebody typed, so it knows more
+    about one thing and less about the trip. That asymmetry is the merge rule:
+    background is filled in by the second pass and never overwritten by it,
+    because a thinner `why_relevant` from a narrower pass is less knowledge
+    rather than corrected knowledge.
+
+    **`likely_errors` is the exception, and it is why this function exists.**
+    `correct._proposals` sorts longest-heard first with a *stable* sort, so a
+    new row appended for words an existing row already claims never fires: the
+    old row matches first, and the new one is reported as "not found in the
+    transcript". The person's own correction, silently ignored, with a change
+    log that says so. Matched on `heard` and replaced in place.
+
+    `answered` names the open questions the person has now settled. They have
+    to go, not just stop being asked: `output._shared` feeds this list to the
+    writer under "do not present these as settled", so an answered question
+    left in makes the rewritten summary hedge about the exact thing they
+    just cleared up.
+    """
+    merged = ContextMap(
+        people=_fill(base.people, found.people, "name"),
+        organisations=_fill(base.organisations, found.organisations, "name"),
+        terms=_fill(base.terms, found.terms, "term"),
+        projects=_fill(base.projects, found.projects, "name"),
+        likely_errors=_replace(base.likely_errors, found.likely_errors, "heard"),
+        hard_dates=_dedupe(base.hard_dates, found.hard_dates, ("date", "what")),
+        open_questions=_questions(base.open_questions, found.open_questions, answered),
+        searches=list(base.searches) + list(found.searches),
+    )
+    return merged
+
+
+def _replace(base: list, found: list, key: str) -> list:
+    """Later wins, in place, so the ordering the correction stage relies on holds."""
+    out = [dict(row) for row in base]
+    index = {_key(row.get(key)): i for i, row in enumerate(out)}
+    for row in found:
+        at = index.get(_key(row.get(key)))
+        if at is None:
+            index[_key(row.get(key))] = len(out)
+            out.append(dict(row))
+        else:
+            out[at] = dict(row)
+    return out
+
+
+def _fill(base: list, found: list, key: str) -> list:
+    """Union, filling only the gaps. A narrower pass never overwrites a wider one."""
+    out = [dict(row) for row in base]
+    index = {_key(row.get(key)): i for i, row in enumerate(out)}
+    for row in found:
+        at = index.get(_key(row.get(key)))
+        if at is None:
+            index[_key(row.get(key))] = len(out)
+            out.append(dict(row))
+            continue
+        for field, value in row.items():
+            if value and not out[at].get(field):
+                out[at][field] = value
+    return out
+
+
+def _dedupe(base: list, found: list, keys: tuple) -> list:
+    out = [dict(row) for row in base]
+    seen = {tuple(_key(row.get(k)) for k in keys) for row in out}
+    for row in found:
+        signature = tuple(_key(row.get(k)) for k in keys)
+        if signature not in seen:
+            seen.add(signature)
+            out.append(dict(row))
+    return out
+
+
+def _questions(base: list, found: list, answered) -> list:
+    settled = {_key(a) for a in (answered or [])}
+    out = [q for q in base if _key(q) not in settled]
+    known = {_key(q) for q in out}
+    for question in found:
+        if _key(question) not in known and _key(question) not in settled:
+            known.add(_key(question))
+            out.append(question)
+    return out
 
 
 def _preflight(search):

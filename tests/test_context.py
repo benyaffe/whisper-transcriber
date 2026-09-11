@@ -313,3 +313,117 @@ def test_a_hand_edited_file_with_a_wrong_type_does_not_crash_the_load(tmp_path):
     reloaded = context.ContextMap.load(tmp_path)
 
     assert reloaded.people == []
+
+
+# --- folding a second pass into the first ----------------------------------------
+
+
+def test_a_second_pass_does_not_lose_the_first():
+    base = _map_with(people=[{"name": "Anya"}], terms=[{"term": "PMG"}])
+    found = _map_with(people=[{"name": "Dr Okafor"}])
+
+    merged = context.merge(base, found)
+
+    assert [p["name"] for p in merged.people] == ["Anya", "Dr Okafor"]
+    assert [t["term"] for t in merged.terms] == ["PMG"]
+
+
+def test_the_same_person_found_twice_is_listed_once():
+    base = _map_with(people=[{"name": "Anya Petrov-Hale"}])
+    found = _map_with(people=[{"name": "  anya petrov-hale  "}])
+
+    merged = context.merge(base, found)
+
+    assert len(merged.people) == 1
+
+
+def test_a_narrower_pass_fills_gaps_and_does_not_overwrite():
+    """The second pass was seeded by one sentence, so it knows more about one
+    thing and less about the trip. A thinner answer is less knowledge, not
+    corrected knowledge."""
+    base = _map_with(people=[{"name": "Anya", "role": "GM", "why_relevant": ""}])
+    found = _map_with(people=[{"name": "Anya", "role": "", "why_relevant": "ran the trip"}])
+
+    merged = context.merge(base, found)
+
+    assert merged.people[0]["role"] == "GM"
+    assert merged.people[0]["why_relevant"] == "ran the trip"
+
+
+def test_a_correction_for_the_same_words_replaces_rather_than_appends():
+    """The one that matters. `correct._proposals` sorts longest-heard first with
+    a stable sort, so an appended row for words an existing row already claims
+    never fires: the old row matches and the new one is reported as "not found
+    in the transcript"."""
+    from src.podcastnotes import correct
+
+    base = _map_with(likely_errors=[
+        {"heard": "Simon", "probably": "Simone", "confidence": "medium"},
+    ])
+    found = _map_with(likely_errors=[
+        {"heard": "simon", "probably": "Simone Vasari", "confidence": "high"},
+    ])
+
+    merged = context.merge(base, found)
+    payload = {"segments": [{"text": "we met Simon there", "words": []}]}
+    result = correct.apply(payload, merged)
+
+    assert len(merged.likely_errors) == 1
+    assert result.payload["segments"][0]["text"] == "we met Simone Vasari there"
+    assert result.unmatched == []
+
+
+def test_a_question_the_person_answered_stops_being_open():
+    """`output._shared` feeds these to the writer under "do not present as
+    settled", so an answered one left in makes the rewrite hedge about the
+    exact thing they just cleared up."""
+    base = _map_with(open_questions=["Who is Kestler?", "What is 60-hold?"])
+
+    merged = context.merge(base, _map_with(), answered=["who is kestler?"])
+
+    assert merged.open_questions == ["What is 60-hold?"]
+
+
+def test_a_newly_raised_question_is_kept():
+    merged = context.merge(
+        _map_with(open_questions=["Old one"]),
+        _map_with(open_questions=["New one", "Old one"]),
+    )
+
+    assert merged.open_questions == ["Old one", "New one"]
+
+
+def test_the_searches_from_both_passes_are_counted():
+    merged = context.merge(_map_with(searches=["a", "b"]), _map_with(searches=["c"]))
+
+    assert merged.searches == ["a", "b", "c"]
+
+
+def test_a_repeated_date_is_not_listed_twice():
+    row = {"date": "2026-09-08", "what": "the visits"}
+
+    merged = context.merge(_map_with(hard_dates=[row]), _map_with(hard_dates=[dict(row)]))
+
+    assert len(merged.hard_dates) == 1
+
+
+def test_merging_nothing_changes_nothing():
+    base = _map_with(people=[{"name": "Anya"}], likely_errors=[{"heard": "a", "probably": "b"}])
+
+    merged = context.merge(base, _map_with())
+
+    assert merged.people == base.people
+    assert merged.likely_errors == base.likely_errors
+
+
+def test_the_originals_are_left_alone():
+    """A caller showing what a revision changed needs both versions."""
+    base = _map_with(people=[{"name": "Anya", "role": "GM"}])
+
+    context.merge(base, _map_with(people=[{"name": "Anya", "role": "", "extra": "x"}]))
+
+    assert base.people == [{"name": "Anya", "role": "GM"}]
+
+
+def _map_with(**kwargs):
+    return context.ContextMap(**kwargs)
