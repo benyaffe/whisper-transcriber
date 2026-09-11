@@ -132,17 +132,22 @@ def test_a_trip_needs_a_recording(view):
     assert "recording" in view.reported[-1].lower(), "the operator was not told why"
 
 
-def test_speakers_without_a_token_blocks_and_names_settings(view, audio_files, monkeypatch):
-    """Catch it here, not thirty minutes into a transcription."""
+def test_speakers_without_a_token_blocks_and_names_the_screen_to_open(view, audio_files, monkeypatch):
+    """Catch it here, not thirty minutes into a transcription.
+
+    It says Accounts rather than Settings now: the menu had both words for two
+    different screens over the same four accounts, and sending somebody to the
+    wrong one of them is the whole point of naming it in this message.
+    """
     monkeypatch.setattr(IntakeView, "_hf_token", staticmethod(lambda: ""))
     ready(view, sources=audio_files[:1], speakers=True)
 
     problem = view._problem()
 
-    assert "Settings" in problem
+    assert "Accounts" in problem
     assert "Name the speakers" in problem, "name the control the way the screen does"
     assert started(view) == []
-    assert IntakeView._needs_token(problem), "should offer to open Settings"
+    assert IntakeView._needs_token(problem), "should offer to open Accounts"
 
 
 def test_turning_speakers_off_unblocks_a_trip_with_no_token(view, audio_files, monkeypatch):

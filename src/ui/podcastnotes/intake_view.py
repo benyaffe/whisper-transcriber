@@ -302,7 +302,7 @@ class IntakeView(QWidget):
         if self.speakers_checkbox.isChecked() and not self._hf_token():
             return (
                 "Naming speakers needs a HuggingFace token, which is not set up "
-                "yet. Add one in Settings, or untick Name the speakers."
+                "yet. Add one in Accounts, or untick Name the speakers."
             )
         # Only speaker identification has the memory problem, so a trip that is
         # not doing it has no reason to be capped.
@@ -357,7 +357,7 @@ class IntakeView(QWidget):
 
     @staticmethod
     def _needs_token(problem: str) -> bool:
-        return "Settings" in problem
+        return "Accounts" in problem
 
     def _start(self):
         problem = self._problem()

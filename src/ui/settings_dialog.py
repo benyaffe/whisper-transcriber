@@ -53,7 +53,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Settings")
+        self.setWindowTitle("Accounts")
         self.setMinimumWidth(550)
         self._setup_ui()
         self._load_settings()

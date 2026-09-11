@@ -203,7 +203,10 @@ class SetupView(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
 
-        layout.addWidget(role(QLabel("Setup"), "h1"))
+        # Named, so a test can hold it to the menu entry that opens it. The
+        # two drifted once already.
+        self.heading = role(QLabel("Setup"), "h1")
+        layout.addWidget(self.heading)
         self.summary = QLabel("Checking what is working...")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)

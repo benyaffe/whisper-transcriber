@@ -328,3 +328,41 @@ def test_skipping_still_advances_the_round(window):
     window._answers_given({})
 
     assert _FakeWorker.started[0] == "answers"
+
+
+# --- the two menu entries used to mean the same thing ----------------------------
+
+
+def test_the_menu_does_not_offer_two_words_for_the_same_idea(window):
+    """"Settings..." and "Setup..." sat next to each other meaning different
+    screens over the same four accounts, one to type them in and one to check
+    they work. Somebody told to open Setup opened Settings instead."""
+    menu = window.menuBar().actions()[0].menu()
+    labels = [a.text() for a in menu.actions()]
+
+    assert "Setup..." in labels
+    assert "Settings..." not in labels
+    assert "Accounts..." in labels
+
+
+def test_setup_comes_first_because_it_is_the_one_to_open_when_stuck(window):
+    menu = window.menuBar().actions()[0].menu()
+    labels = [a.text() for a in menu.actions()]
+
+    assert labels.index("Setup...") < labels.index("Accounts...")
+
+
+def test_each_menu_entry_matches_the_window_it_opens(qt_app):
+    """The mismatch that started this: the label clicked and the heading that
+    appeared were different words."""
+    from src.ui.podcastnotes.setup_view import SetupView
+    from src.ui.settings_dialog import SettingsDialog
+
+    view = SetupView()
+    dialog = SettingsDialog()
+    try:
+        assert view.heading.text() == "Setup"
+        assert dialog.windowTitle() == "Accounts"
+    finally:
+        view.close()
+        dialog.close()

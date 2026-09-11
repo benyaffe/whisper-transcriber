@@ -82,12 +82,20 @@ class MainWindow(QMainWindow):
         self._setup_menu()
 
     def _setup_menu(self):
+        """Two entries, and they used to be near-synonyms sitting together.
+
+        "Settings..." and "Setup..." meant different screens covering the same
+        four accounts, one to type them in and one to check they work, and
+        somebody told to go to Setup opened Settings instead. The dialog is now
+        called Accounts, which is what it holds, and the checklist keeps Setup.
+        Setup comes first because it is the one to open when something is wrong.
+        """
         app_menu = self.menuBar().addMenu("PodcastNotesWT")
-        settings_action = app_menu.addAction("Settings...")
-        settings_action.setShortcut("Cmd+,")
-        settings_action.triggered.connect(self._open_settings)
         setup_action = app_menu.addAction("Setup...")
         setup_action.triggered.connect(self.show_setup)
+        settings_action = app_menu.addAction("Accounts...")
+        settings_action.setShortcut("Cmd+,")
+        settings_action.triggered.connect(self._open_settings)
 
     def show_setup(self):
         """Open the checklist and run it.
