@@ -38,7 +38,17 @@ from src.podcastnotes.qa import MARKER
 # Em-dash, en-dash used as a dash, and the double hyphen people type instead.
 # Replaced with a comma and a space, which is the substitution Ben makes by
 # hand and the reason this rule exists at all.
-DASHES = re.compile(r"\s*(?:—|--|(?<=\s)–(?=\s))\s*")
+DASHES = re.compile(r"\s*(?:—|-{2,}|(?<=\s)–(?=\s))\s*")
+
+# A line of three or more hyphens is a Markdown horizontal rule, not somebody
+# reaching for an em-dash.
+#
+# This is the fix for a real defect and not a hypothetical. `--` matched inside
+# `---`, so every section break became the literal text ", -" and took the blank
+# line after it along too. It happened four times in the last real transcript,
+# and the symptom people reported was that the document had no line breaks and
+# was hard to read, which sounds like a rendering problem and is not.
+RULE_LINE = re.compile(r"^[ \t]*-{3,}[ \t]*$")
 
 
 @dataclass
@@ -240,10 +250,21 @@ def enforce(text: str, style: HouseStyle = None) -> tuple:
     lands in a published document with somebody's name on it.
     """
     style = style or HouseStyle()
+    if style.em_dashes:
+        return text, 0
+
+    # Line by line, so a horizontal rule can be left alone. Substituting over
+    # the whole document is what turned every section break into ", -".
     fixes = 0
-    if not style.em_dashes:
-        text, fixes = DASHES.subn(", ", text)
-    return text, fixes
+    lines = []
+    for line in text.split("\n"):
+        if RULE_LINE.match(line):
+            lines.append(line)
+            continue
+        line, count = DASHES.subn(", ", line)
+        fixes += count
+        lines.append(line)
+    return "\n".join(lines), fixes
 
 
 def _markers(text: str) -> set:

@@ -293,3 +293,64 @@ def test_both_writers_are_told_to_leave_the_process_out():
     a trip summary."""
     for system in (output.TRANSCRIPT_SYSTEM, output.SUMMARY_SYSTEM):
         assert "how the transcript was made" in system
+
+
+# --- horizontal rules are not em-dashes ------------------------------------------
+
+
+@pytest.mark.parametrize("rule", ["---", "----", "  ---  ", "\t---"])
+def test_a_horizontal_rule_survives(rule):
+    """The regression this whole fix exists for. `--` matched inside `---`, so
+    every section break became the literal text ", -" and swallowed the blank
+    line after it. Four times in the last real transcript, and the symptom was
+    reported as the document having no line breaks, which sounds like a
+    rendering problem and is not."""
+    text = f"before\n\n{rule}\n\nafter"
+
+    fixed, count = output.enforce(text)
+
+    assert fixed == text
+    assert count == 0
+
+
+def test_a_rule_between_two_documents_survives():
+    """`Documents.combined` joins the summary and the transcript with one."""
+    documents = output.Documents(transcript="T", summary="S")
+
+    fixed, _ = output.enforce(documents.combined)
+
+    assert "\n\n---\n\n" in fixed
+    assert ", -" not in fixed
+
+
+def test_three_hyphens_inside_a_line_are_still_a_dash():
+    """Only a line that is nothing but hyphens is a rule. Inline, it is
+    somebody reaching for an em-dash, and leaving a stray hyphen behind was the
+    other half of the same bug."""
+    fixed, count = output.enforce("the room was fine --- mostly")
+
+    assert fixed == "the room was fine, mostly"
+    assert count == 1
+
+
+def test_a_rule_does_not_stop_the_rest_of_the_line_being_fixed():
+    text = "one — two\n\n---\n\nthree -- four"
+
+    fixed, count = output.enforce(text)
+
+    assert fixed == "one, two\n\n---\n\nthree, four"
+    assert count == 2
+
+
+def test_a_real_document_comes_out_clean():
+    """End to end on the shape output.write actually produces."""
+    document = (
+        "# Heading\n\nSome prose with an em-dash — here.\n\n---\n\n"
+        "## Next\n\nA 12-lead ECG and a rule-out pathway.\n"
+    )
+
+    fixed, _ = output.enforce(document)
+
+    assert ", -\n" not in fixed
+    assert "\n---\n" in fixed
+    assert "12-lead" in fixed and "rule-out" in fixed
