@@ -236,3 +236,19 @@ def patched_diarization(fake_pipeline, monkeypatch):
     )
 
     yield fake_pipeline
+
+
+@pytest.fixture(autouse=True)
+def no_cached_glean_token():
+    """Start every test with no access token remembered.
+
+    `glean_auth` caches one for two minutes so that a fan-out of parallel
+    searches shares a single refresh. Module-level state outlives a test, so
+    without this a test that populates it makes a later test that expects no
+    network quietly pass by using the leftover.
+    """
+    from src.podcastnotes import glean_auth
+
+    glean_auth.forget_access_token()
+    yield
+    glean_auth.forget_access_token()

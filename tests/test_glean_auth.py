@@ -494,3 +494,105 @@ def test_the_address_is_handed_over_before_the_wait(monkeypatch):
     assert len(seen) == 1
     assert seen[0].startswith("https://example.com/authorize?")
     assert "client-123" in seen[0]
+
+
+# --- one refresh at a time -------------------------------------------------------
+
+
+def _stub_refresh(monkeypatch, exchanges):
+    """A token endpoint that records every call and rotates the refresh token."""
+    from src.podcastnotes import glean_auth
+
+    glean_auth.forget_access_token()
+    monkeypatch.setattr(glean_auth, "get_refresh_token", lambda: "refresh-0")
+    monkeypatch.setattr(glean_auth, "get_client_id", lambda: "client-1")
+    monkeypatch.setattr(glean_auth, "discover",
+                        lambda i: {"token_endpoint": "https://example.com/token"})
+    monkeypatch.setattr(glean_auth, "save_refresh_token", lambda t: None)
+
+    def exchange(endpoint, form):
+        import time
+
+        exchanges.append(form)
+        time.sleep(0.05)          # a real network call is not instant
+        return {"access_token": f"access-{len(exchanges)}",
+                "refresh_token": f"refresh-{len(exchanges)}"}
+
+    monkeypatch.setattr(glean_auth, "_exchange", exchange)
+
+
+def test_concurrent_callers_share_one_refresh(monkeypatch):
+    """Glean rotates the refresh token on use, so two threads refreshing at once
+    present the same token twice. The server may reject the second as a replay,
+    and the last writer can persist a token that was already invalidated, which
+    signs the person out at some unconnected later moment.
+
+    This is the precondition for running the searches in parallel at all."""
+    import threading
+
+    from src.podcastnotes import glean_auth
+
+    exchanges = []
+    _stub_refresh(monkeypatch, exchanges)
+
+    tokens = []
+    threads = [
+        threading.Thread(target=lambda: tokens.append(glean_auth.access_token("acme")))
+        for _ in range(6)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(exchanges) == 1, f"{len(exchanges)} concurrent refreshes"
+    assert len(set(tokens)) == 1, "callers got different tokens"
+
+
+def test_the_cache_is_short(monkeypatch):
+    """An access token lasts about an hour, and a cache that holds one for
+    anything like that long is the reason things stop working mid-job."""
+    from src.podcastnotes.glean_auth import TOKEN_CACHE_SECONDS
+
+    assert TOKEN_CACHE_SECONDS <= 300
+
+
+def test_the_cache_expires(monkeypatch):
+    import time
+
+    from src.podcastnotes import glean_auth
+
+    exchanges = []
+    _stub_refresh(monkeypatch, exchanges)
+
+    glean_auth.access_token("acme")
+    monkeypatch.setattr(time, "monotonic", lambda: time.perf_counter() + 10_000)
+    glean_auth.access_token("acme")
+
+    assert len(exchanges) == 2
+
+
+def test_a_different_instance_is_not_served_from_the_cache(monkeypatch):
+    from src.podcastnotes import glean_auth
+
+    exchanges = []
+    _stub_refresh(monkeypatch, exchanges)
+
+    glean_auth.access_token("acme")
+    glean_auth.access_token("somewhere-else")
+
+    assert len(exchanges) == 2
+
+
+def test_signing_out_drops_the_cached_token(monkeypatch):
+    """Otherwise a signed-out app keeps working for two minutes."""
+    from src.podcastnotes import glean_auth
+
+    exchanges = []
+    _stub_refresh(monkeypatch, exchanges)
+    monkeypatch.setattr(glean_auth, "save_client_id", lambda t: None)
+    glean_auth.access_token("acme")
+
+    glean_auth.sign_out()
+
+    assert glean_auth._TOKEN_CACHE["token"] == ""

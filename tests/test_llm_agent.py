@@ -373,3 +373,146 @@ def test_the_progress_callback_sees_each_call_as_it_happens():
     agent.ask("go", tools=[_tool()], client=client, on_tool=lambda n, i: seen.append((n, i)))
 
     assert seen == [("search", {"q": "x"})]
+
+
+# --- running a turn's tools together --------------------------------------------
+
+
+def test_several_tools_in_one_turn_run_at_the_same_time():
+    """Claude routinely asks for three or four searches at once, and running
+    them one after another is most of the wall clock of the context stage: each
+    is a network round trip that spends the whole time waiting."""
+    import threading
+    import time
+
+    running = []
+    peak = []
+    lock = threading.Lock()
+
+    def slow(payload):
+        with lock:
+            running.append(1)
+            peak.append(len(running))
+        time.sleep(0.15)
+        with lock:
+            running.pop()
+        return "done"
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {"q": str(i)}, id=f"t{i}") for i in range(4)],
+                 stop_reason="tool_use"),
+        _Message([_Text("finished")]),
+    ])
+
+    started = time.time()
+    agent.ask("go", tools=[_tool(run=slow)], client=client)
+    elapsed = time.time() - started
+
+    assert max(peak) > 1, "the searches ran one after another"
+    assert elapsed < 0.45, f"four 0.15s searches took {elapsed:.2f}s"
+
+
+def test_the_results_come_back_in_the_order_they_were_asked_for():
+    """Appending as they finish would order them by whatever the network did."""
+    import time
+
+    def varying(payload):
+        # The first query asked for is the slowest to answer.
+        time.sleep(0.12 if payload["q"] == "0" else 0.01)
+        return f"answer to {payload['q']}"
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {"q": str(i)}, id=f"t{i}") for i in range(3)],
+                 stop_reason="tool_use"),
+        _Message([_Text("finished")]),
+    ])
+
+    agent.ask("go", tools=[_tool(run=varying)], client=client)
+
+    blocks = client.sent[-1]["messages"][-1]["content"]
+    assert [b["tool_use_id"] for b in blocks] == ["t0", "t1", "t2"]
+    assert blocks[0]["content"] == "answer to 0"
+
+
+def test_the_budget_is_still_counted_once_per_call():
+    """A counter incremented from four threads is a race. The decision stays on
+    the calling thread; only the running fans out."""
+    calls = []
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {"q": str(i)}, id=f"t{i}") for i in range(5)],
+                 stop_reason="tool_use"),
+        _Message([_Text("finished")]),
+    ])
+
+    answer = agent.ask(
+        "go", tools=[_tool(calls=calls)], client=client, max_tool_calls=2
+    )
+
+    assert len(calls) == 2
+    assert answer.stopped_early is True
+
+
+def test_a_fatal_failure_in_a_parallel_turn_still_ends_the_run():
+    class Revoked(Exception):
+        pass
+
+    def revoked_on_the_third(payload):
+        if payload["q"] == "2":
+            raise Revoked("token gone")
+        return "fine"
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {"q": str(i)}, id=f"t{i}") for i in range(4)],
+                 stop_reason="tool_use"),
+        _Message([_Text("never reached")]),
+    ])
+
+    with pytest.raises(Revoked):
+        agent.ask("go", tools=[_tool(run=revoked_on_the_third)],
+                  client=client, fatal=(Revoked,))
+
+
+def test_one_failing_search_among_four_does_not_lose_the_others():
+    def sometimes(payload):
+        if payload["q"] == "1":
+            raise ValueError("bad query")
+        return f"answer to {payload['q']}"
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {"q": str(i)}, id=f"t{i}") for i in range(4)],
+                 stop_reason="tool_use"),
+        _Message([_Text("finished")]),
+    ])
+
+    agent.ask("go", tools=[_tool(run=sometimes)], client=client)
+
+    blocks = client.sent[-1]["messages"][-1]["content"]
+    assert len(blocks) == 4
+    assert sum(1 for b in blocks if b.get("is_error")) == 1
+    assert blocks[1]["tool_use_id"] == "t1", "the failure kept its place"
+
+
+def test_a_single_tool_call_does_not_start_a_pool():
+    """The common case should be exactly what it always was."""
+    import concurrent.futures
+
+    started = []
+    original = concurrent.futures.ThreadPoolExecutor
+
+    class _Watched(original):
+        def __init__(self, *a, **k):
+            started.append(1)
+            super().__init__(*a, **k)
+
+    concurrent.futures.ThreadPoolExecutor = _Watched
+    try:
+        client = _FakeClient([
+            _Message([_ToolUse("search", {"q": "one"})], stop_reason="tool_use"),
+            _Message([_Text("done")]),
+        ])
+        agent.ask("go", tools=[_tool()], client=client)
+    finally:
+        concurrent.futures.ThreadPoolExecutor = original
+
+    assert started == []

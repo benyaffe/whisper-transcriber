@@ -302,32 +302,77 @@ def _exchange(token_endpoint: str, form: dict) -> dict:
         raise SignInFailed(f"Glean rejected the request ({e.code}): {detail}")
 
 
+# One refresh at a time, and a short memory of the last one.
+#
+# Glean rotates the refresh token on use, so two threads refreshing at once
+# present the same token twice: the server may reject the second as a replay,
+# and whichever finishes last writes its result over the other, which can
+# persist a token that has already been invalidated. The person is then signed
+# out at some unpredictable later moment with no way to connect it to anything.
+#
+# This is not a hypothetical tidy-up. It is the precondition for running the
+# context stage's searches concurrently, which is the whole point of holding a
+# lock here.
+_TOKEN_LOCK = threading.Lock()
+_TOKEN_CACHE = {"instance": "", "token": "", "expires": 0.0}
+
+# Well inside the hour an access token is good for. Long enough that a burst of
+# concurrent searches shares one refresh, short enough that it is never the
+# reason something stops working mid-job.
+TOKEN_CACHE_SECONDS = 120
+
+
 def access_token(instance: str) -> str:
     """A usable access token, minted from the saved refresh token.
 
-    Called at request time rather than cached, because an access token is good
-    for about an hour and a cached one is the reason things stop working in the
-    middle of a long job.
+    Cached for two minutes, and only that. An access token is good for about an
+    hour, and a cache that holds one for anything like that long is the reason
+    things stop working in the middle of a long job. Two minutes exists to stop
+    a fan-out of parallel searches asking for four at once, not to save work.
     """
-    refresh_token = get_refresh_token()
-    client_id = get_client_id()
-    if not refresh_token or not client_id:
-        return ""
+    import time
 
-    metadata = discover(instance)
-    tokens = _exchange(
-        metadata["token_endpoint"],
-        {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-        },
-    )
-    # Glean may rotate the refresh token on use. Dropping the new one logs the
-    # person out at some unpredictable point later.
-    if tokens.get("refresh_token"):
-        save_refresh_token(tokens["refresh_token"])
-    return tokens.get("access_token", "")
+    with _TOKEN_LOCK:
+        fresh = (
+            _TOKEN_CACHE["token"]
+            and _TOKEN_CACHE["instance"] == instance
+            and time.monotonic() < _TOKEN_CACHE["expires"]
+        )
+        if fresh:
+            return _TOKEN_CACHE["token"]
+
+        refresh_token = get_refresh_token()
+        client_id = get_client_id()
+        if not refresh_token or not client_id:
+            return ""
+
+        metadata = discover(instance)
+        tokens = _exchange(
+            metadata["token_endpoint"],
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            },
+        )
+        # Glean may rotate the refresh token on use. Dropping the new one logs
+        # the person out at some unpredictable point later.
+        if tokens.get("refresh_token"):
+            save_refresh_token(tokens["refresh_token"])
+
+        token = tokens.get("access_token", "")
+        _TOKEN_CACHE.update(
+            instance=instance,
+            token=token,
+            expires=time.monotonic() + TOKEN_CACHE_SECONDS,
+        )
+        return token
+
+
+def forget_access_token():
+    """Drop the cached token. For signing out, and for tests."""
+    with _TOKEN_LOCK:
+        _TOKEN_CACHE.update(instance="", token="", expires=0.0)
 
 
 # --- what is remembered -------------------------------------------------------
@@ -381,3 +426,4 @@ def signed_in() -> bool:
 def sign_out():
     save_refresh_token("")
     save_client_id("")
+    forget_access_token()

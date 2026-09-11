@@ -49,6 +49,11 @@ DEFAULT_EFFORT = "xhigh"
 # ever calling a tool or finishing.
 MAX_TURNS = 40
 
+# How many tool calls to run at once. Claude rarely asks for more than four in
+# a turn, and these are network round trips rather than work, so the ceiling is
+# about being a considerate client rather than about local resources.
+MAX_PARALLEL_TOOLS = 6
+
 
 class Refused(Exception):
     """Claude declined the request outright.
@@ -185,14 +190,21 @@ def ask(
         messages.append({"role": "assistant", "content": message.content})
 
         # One user message carrying every result, however many there were.
-        results = []
-        for block in message.content:
+        #
+        # The decisions stay here, in order, on this thread: which calls are
+        # inside the budget, which name a tool that exists, and what order the
+        # results go back in. Only the running of them fans out. A budget
+        # counter incremented from four threads is a race, and results appended
+        # as they finish would come back in whatever order the network chose.
+        results = [None] * len(message.content)
+        to_run = []
+        for index, block in enumerate(message.content):
             if getattr(block, "type", "") != "tool_use":
                 continue
 
             if used >= max_tool_calls:
                 stopped_early = True
-                results.append(_result(block.id, _EXHAUSTED))
+                results[index] = _result(block.id, _EXHAUSTED)
                 continue
 
             used += 1
@@ -204,20 +216,67 @@ def ask(
             if tool is None:
                 # Claude invented a tool. Saying so is more useful than
                 # failing, since it can recover on the next turn.
-                results.append(_result(block.id, f"No such tool: {block.name}", error=True))
+                results[index] = _result(
+                    block.id, f"No such tool: {block.name}", error=True
+                )
                 continue
 
-            try:
-                results.append(_result(block.id, tool.run(block.input)))
-            except fatal:
-                raise
-            except Exception as e:
-                results.append(_result(block.id, f"{type(e).__name__}: {e}", error=True))
+            to_run.append((index, block, tool))
 
-        messages.append({"role": "user", "content": results})
+        for index, outcome in _run_tools(to_run, fatal):
+            results[index] = outcome
+
+        messages.append({"role": "user", "content": [r for r in results if r]})
 
     # Fell out of the turn cap without a final answer.
     return Answer("", spend, called, stopped_early=True)
+
+
+def _run_tools(to_run: list, fatal: tuple):
+    """Run this turn's tools, together where there is more than one.
+
+    Claude routinely asks for three or four searches at once, and running them
+    one after another is most of the wall clock of the context stage: each is a
+    network round trip that spends the whole time waiting.
+
+    One call still runs on this thread. A pool for a single search is pure
+    overhead, and it keeps the common case identical to what it always was.
+
+    A `fatal` failure is re-raised here rather than turned into a result, and
+    it is the first one raised in index order rather than whichever thread
+    happened to lose first, so the same input fails the same way twice.
+    """
+    if not to_run:
+        return []
+
+    if len(to_run) == 1:
+        # A pool for a single search is pure overhead, and it keeps the common
+        # case identical to what it always was.
+        outcomes = [_call(to_run[0][1], to_run[0][2], fatal)]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(
+            max_workers=min(len(to_run), MAX_PARALLEL_TOOLS)
+        ) as pool:
+            outcomes = list(pool.map(lambda job: _call(job[1], job[2], fatal), to_run))
+
+    # In index order, so the same input fails the same way twice rather than
+    # reporting whichever thread happened to lose first.
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    return [(index, outcome) for (index, _, _), outcome in zip(to_run, outcomes)]
+
+
+def _call(block, tool, fatal):
+    """One tool. A fatal failure comes back to be raised in order, not thrown."""
+    try:
+        return _result(block.id, tool.run(block.input))
+    except fatal as e:
+        return e
+    except Exception as e:
+        return _result(block.id, f"{type(e).__name__}: {e}", error=True)
 
 
 _EXHAUSTED = (
