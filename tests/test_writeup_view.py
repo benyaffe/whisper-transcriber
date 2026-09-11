@@ -17,7 +17,9 @@ import pytest
 
 from src.podcastnotes.attribution import Suggestion, Voice
 from src.podcastnotes.output import Documents
-from src.ui.podcastnotes.writeup_view import WriteUpView, _summarise
+from src.ui.podcastnotes.writeup_view import (
+    PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS, PANE_WAITING, WriteUpView, _summarise,
+)
 
 
 @pytest.fixture
@@ -138,7 +140,7 @@ def test_playing_a_voice_asks_for_its_own_moment(view):
 def test_the_waiting_pane_says_what_is_happening(view):
     view.working("Reading the background for this trip", "Looking up: Lanternfish")
 
-    assert view.panes.currentIndex() == 0
+    assert view.panes.currentIndex() == PANE_WAITING
     assert view.stage.text() == "Reading the background for this trip"
     assert view.detail.text() == "Looking up: Lanternfish"
 
@@ -185,7 +187,7 @@ def test_the_documents_pane_summarises_the_changes(view):
     view.show_documents(Documents(transcript="t", summary="s"),
                         notes=["Corrected: a -> b (2x)", "Flagged: c -> d (1x)"])
 
-    assert view.panes.currentIndex() == 2
+    assert view.panes.currentIndex() == PANE_DONE
     assert "1 correction applied" in view.changes.text()
     assert "1 marked as uncertain" in view.changes.text()
 
@@ -283,3 +285,84 @@ def test_the_heading_goes_back_when_a_later_step_runs(view):
     view.working("Applying your answers")
 
     assert view.title.text() == "Writing this up"
+
+
+# --- the question rounds -------------------------------------------------------
+
+
+class _Q:
+    def __init__(self, marker, ask="What did they mean?", why=""):
+        self.marker = marker
+        self.ask = ask
+        self.why_it_matters = why
+        self.occurrences = 1
+
+
+class _Round:
+    def __init__(self, questions, remaining=0):
+        self.questions = questions
+        self.remaining = remaining
+
+
+def test_each_question_gets_its_own_box(view):
+    view.ask_questions(_Round([_Q("Kestler"), _Q("z-lanes")]))
+
+    assert view.panes.currentIndex() == PANE_QUESTIONS
+    assert len(view._questions) == 2
+
+
+def test_only_answered_questions_are_sent(view):
+    """Leaving one blank keeps its marker, which is the honest outcome and the
+    reason the markers exist."""
+    view.ask_questions(_Round([_Q("Kestler"), _Q("z-lanes")]))
+    view._questions[0].box.setText("It is Kessler.")
+    view._questions[1].box.setText("   ")
+
+    got = {}
+    view.answers_given.connect(got.update)
+    view._send_answers()
+
+    assert got == {"Kestler": "It is Kessler."}
+
+
+def test_skipping_sends_an_empty_answer_rather_than_nothing(view):
+    """Skipping is a real answer to "can you settle any of these", so the
+    pipeline still advances the round and the markers simply stay."""
+    view.ask_questions(_Round([_Q("Kestler")]))
+    view._questions[0].box.setText("would be ignored")
+
+    got = []
+    view.answers_given.connect(got.append)
+    view.skip.click()
+
+    assert got == [{}]
+
+
+def test_the_number_still_waiting_is_shown(view):
+    """Three rounds of four is the cap, so somebody with seventeen markers
+    should know some will not be asked."""
+    view.ask_questions(_Round([_Q("Kestler")], remaining=13))
+
+    assert "13 more" in view.round_blurb.text()
+
+
+def test_no_leftovers_means_no_mention_of_them(view):
+    view.ask_questions(_Round([_Q("Kestler")], remaining=0))
+
+    assert "more" not in view.round_blurb.text()
+
+
+def test_a_second_round_replaces_the_first(view):
+    view.ask_questions(_Round([_Q("Kestler"), _Q("z-lanes")]))
+
+    view.ask_questions(_Round([_Q("60 hold")]))
+
+    assert len(view._questions) == 1
+    assert view._questions[0].question.marker == "60 hold"
+
+
+def test_why_it_matters_is_shown_when_there_is_a_reason(view):
+    view.ask_questions(_Round([_Q("Kestler", why="It gets published against a name.")]))
+
+    labels = [c.text() for c in view._questions[0].findChildren(type(view.unnamed))]
+    assert any("published against a name" in t for t in labels)

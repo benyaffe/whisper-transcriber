@@ -1,11 +1,11 @@
 """
 The screen the write-up happens on, and the one place it asks anything.
 
-Three panes behind one widget: waiting, naming the speakers, and the finished
-documents. They are panes rather than separate screens because the write-up is
-one continuous thing from the user's point of view, and bouncing between
-top-level screens for a job that takes a few minutes reads as the app losing
-its place.
+Four panes behind one widget: waiting, naming the speakers, answering the few
+questions nothing could resolve, and the finished documents. They are panes
+rather than separate screens because the write-up is one continuous thing from
+the user's point of view, and bouncing between top-level screens for a job that
+takes a few minutes reads as the app losing its place.
 
 **Naming a speaker is a decision, so nothing here pre-confirms one.** The
 suggestion arrives filled in, from Claude and from the voice library, and the
@@ -34,6 +34,14 @@ from src.ui.theme import role
 # Long enough to recognise a colleague, short enough that reviewing four of
 # them is not a chore. Matches what snippet.py already cuts.
 CLIP_SECONDS = 6.0
+
+# Named, because they are positions in a stack and inserting a pane shifts
+# every one after it. Adding the questions pane silently moved the finished
+# documents from 2 to 3, which a bare number gives no way to notice.
+PANE_WAITING = 0
+PANE_SPEAKERS = 1
+PANE_QUESTIONS = 2
+PANE_DONE = 3
 
 
 class SpeakerRow(QFrame):
@@ -106,9 +114,10 @@ class SpeakerRow(QFrame):
 
 
 class WriteUpView(QWidget):
-    """Waiting, naming, and the finished pair of documents."""
+    """Waiting, naming, answering, and the finished pair of documents."""
 
     speakers_confirmed = pyqtSignal(dict)
+    answers_given = pyqtSignal(dict)
     publish_requested = pyqtSignal()
     new_trip_requested = pyqtSignal()
     retry_requested = pyqtSignal()
@@ -117,6 +126,7 @@ class WriteUpView(QWidget):
         super().__init__(parent)
         self._audio_path = ""
         self._rows = []
+        self._questions = []
         self._player = None
         self._build()
 
@@ -134,6 +144,7 @@ class WriteUpView(QWidget):
         self.panes = QStackedWidget()
         self.panes.addWidget(self._waiting_pane())
         self.panes.addWidget(self._speakers_pane())
+        self.panes.addWidget(self._questions_pane())
         self.panes.addWidget(self._done_pane())
         layout.addWidget(self.panes, 1)
 
@@ -208,6 +219,40 @@ class WriteUpView(QWidget):
         layout.addLayout(row)
         return pane
 
+    def _questions_pane(self) -> QWidget:
+        pane = QWidget()
+        layout = QVBoxLayout(pane)
+
+        self.round_blurb = QLabel("")
+        self.round_blurb.setWordWrap(True)
+        role(self.round_blurb, "muted")
+        layout.addWidget(self.round_blurb)
+
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        self._question_holder = QWidget()
+        self._question_layout = QVBoxLayout(self._question_holder)
+        self._question_layout.addStretch(1)
+        area.setWidget(self._question_holder)
+        layout.addWidget(area, 1)
+
+        row = QHBoxLayout()
+        # Skipping is a first-class action, not a way out of a form, so it is a
+        # button rather than an empty box and a shrug. Every question left
+        # unanswered simply keeps its uncertainty marker, which is an honest
+        # outcome and the reason the markers exist at all.
+        self.skip = QPushButton("Skip these")
+        role(self.skip, "quiet")
+        self.skip.clicked.connect(lambda: self.answers_given.emit({}))
+        row.addWidget(self.skip)
+        row.addStretch(1)
+        self.send_answers = QPushButton("Use these answers")
+        role(self.send_answers, "primary")
+        self.send_answers.clicked.connect(self._send_answers)
+        row.addWidget(self.send_answers)
+        layout.addLayout(row)
+        return pane
+
     def _done_pane(self) -> QWidget:
         pane = QWidget()
         layout = QVBoxLayout(pane)
@@ -270,7 +315,7 @@ class WriteUpView(QWidget):
         self.problem.hide()
         self.retry.hide()
         self.bar.show()
-        self.panes.setCurrentIndex(0)
+        self.panes.setCurrentIndex(PANE_WAITING)
 
     def note(self, detail: str):
         self.detail.setText(detail)
@@ -282,7 +327,7 @@ class WriteUpView(QWidget):
         self.retry.show()
         self.bar.hide()
         self.stage.setText("The write-up stopped")
-        self.panes.setCurrentIndex(0)
+        self.panes.setCurrentIndex(PANE_WAITING)
 
     def ask_speakers(self, voices: list, suggestions: list = None):
         by_label = {s.speaker: s for s in (suggestions or [])}
@@ -298,7 +343,33 @@ class WriteUpView(QWidget):
             self._rows.append(row)
 
         self._count_unnamed()
-        self.panes.setCurrentIndex(1)
+        self.panes.setCurrentIndex(PANE_SPEAKERS)
+
+    def ask_questions(self, round_):
+        """One round of questions, each with a box and each skippable."""
+        for widget in self._questions:
+            widget.setParent(None)
+        self._questions = []
+
+        left = (f" There are {round_.remaining} more that could be asked after this."
+                if round_.remaining else "")
+        self.round_blurb.setText(
+            f"A few things nobody could work out from the recording. Answer what you "
+            f"can and leave the rest.{left}"
+        )
+
+        for question in round_.questions:
+            self._questions.append(_QuestionBox(question, self._question_holder))
+            self._question_layout.insertWidget(
+                self._question_layout.count() - 1, self._questions[-1]
+            )
+        self.panes.setCurrentIndex(PANE_QUESTIONS)
+
+    def _send_answers(self):
+        self.answers_given.emit({
+            box.question.marker: box.answer
+            for box in self._questions if box.answer
+        })
 
     def show_documents(self, documents, notes=None):
         self._documents = documents
@@ -316,7 +387,7 @@ class WriteUpView(QWidget):
         self.warnings.setText("\n".join(trouble))
         self.warnings.setVisible(bool(trouble))
         self._show_document("summary")
-        self.panes.setCurrentIndex(2)
+        self.panes.setCurrentIndex(PANE_DONE)
 
     def _show_document(self, which: str):
         documents = getattr(self, "_documents", None)
@@ -352,6 +423,36 @@ class WriteUpView(QWidget):
             self._player.setSource(QUrl.fromLocalFile(self._audio_path))
         self._player.setPosition(int(seconds * 1000))
         self._player.play()
+
+
+class _QuestionBox(QFrame):
+    """One question, its context, and somewhere to answer it."""
+
+    def __init__(self, question, parent=None):
+        super().__init__(parent)
+        self.question = question
+        role(self, "card")
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+
+        ask = QLabel(question.ask)
+        ask.setWordWrap(True)
+        layout.addWidget(ask)
+
+        if question.why_it_matters:
+            why = QLabel(question.why_it_matters)
+            why.setWordWrap(True)
+            role(why, "faint")
+            layout.addWidget(why)
+
+        self.box = QLineEdit()
+        self.box.setPlaceholderText("Leave blank if you do not know")
+        layout.addWidget(self.box)
+
+    @property
+    def answer(self) -> str:
+        return self.box.text().strip()
 
 
 def _summarise(notes: list) -> str:

@@ -17,6 +17,7 @@ import json
 import pytest
 
 from src.ui.main_window import MainWindow, _read_json
+from src.ui.podcastnotes.writeup_view import PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS
 
 
 class _FakeWorker:
@@ -128,7 +129,7 @@ def test_the_speaker_step_stops_and_asks(window):
     window._run_step("speakers")
 
     assert window.stack.currentWidget() is window.writeup_view
-    assert window.writeup_view.panes.currentIndex() == 1
+    assert window.writeup_view.panes.currentIndex() == PANE_SPEAKERS
 
 
 def test_confirming_speakers_records_them_and_moves_on(window):
@@ -159,7 +160,7 @@ def test_the_finished_documents_are_shown(window):
 
     window._run_step("write")
 
-    assert window.writeup_view.panes.currentIndex() == 2
+    assert window.writeup_view.panes.currentIndex() == PANE_DONE
     assert "1 correction applied" in window.writeup_view.changes.text()
 
 
@@ -239,3 +240,59 @@ def test_a_real_file_is_read(tmp_path):
     good.write_text(json.dumps({"sources": [1, 2]}))
 
     assert _read_json(str(good)) == {"sources": [1, 2]}
+
+
+# --- question rounds ------------------------------------------------------------
+
+
+class _Round:
+    def __init__(self, questions, remaining=0):
+        self.questions = questions
+        self.remaining = remaining
+
+
+class _Q:
+    def __init__(self, marker):
+        self.marker = marker
+        self.ask = "What did they mean?"
+        self.why_it_matters = ""
+        self.occurrences = 1
+
+
+def test_a_round_with_questions_stops_and_asks(window):
+    _FakeWorker.results = {"questions": _Round([_Q("Kestler")])}
+
+    window._run_step("questions")
+
+    assert window.writeup_view.panes.currentIndex() == PANE_QUESTIONS
+    assert "write" not in _FakeWorker.started
+
+
+def test_an_empty_round_is_the_end_rather_than_a_skip(window):
+    """The pipeline returning no questions means there is nothing left worth
+    asking, so the write-up finishes rather than waiting for somebody."""
+    from src.podcastnotes.output import Documents
+
+    _FakeWorker.results = {"questions": _Round([]), "write": Documents()}
+
+    window._run_step("questions")
+
+    assert _FakeWorker.started == ["questions", "write"]
+
+
+def test_answers_are_folded_in_and_another_round_is_sought(window):
+    _FakeWorker.results = {"answers": None, "questions": _Round([])}
+
+    window._answers_given({"Kestler": "It is Kessler."})
+
+    assert _FakeWorker.started[0] == "answers"
+    assert "questions" in _FakeWorker.started
+
+
+def test_skipping_still_advances_the_round(window):
+    """Otherwise skipping would offer the same questions forever."""
+    _FakeWorker.results = {"answers": None, "questions": _Round([])}
+
+    window._answers_given({})
+
+    assert _FakeWorker.started[0] == "answers"

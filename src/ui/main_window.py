@@ -61,6 +61,7 @@ class MainWindow(QMainWindow):
 
         self.writeup_view = WriteUpView()
         self.writeup_view.speakers_confirmed.connect(self._speakers_confirmed)
+        self.writeup_view.answers_given.connect(self._answers_given)
         self.writeup_view.publish_requested.connect(self._publish)
         self.writeup_view.new_trip_requested.connect(self._show_intake)
         self.writeup_view.retry_requested.connect(self._retry_writeup)
@@ -267,15 +268,28 @@ class MainWindow(QMainWindow):
         elif step == "answers":
             self._run_step("questions")
         elif step == "questions":
-            # No screen for the rounds yet, and skipping is always allowed, so
-            # an unanswered round moves the write-up on rather than stalling.
-            self._run_step("write")
+            # An empty round is the pipeline saying there is nothing left worth
+            # asking, which is a normal ending rather than a skip.
+            if result is None or not result.questions:
+                self._run_step("write")
+            else:
+                self.writeup_view.ask_questions(result)
         elif step == "write":
             self.writeup_view.show_documents(result, notes=self.writeup.notes)
 
     def _speakers_confirmed(self, names: dict):
         self.writeup.confirm_speakers(names)
         self._run_step("questions")
+
+    def _answers_given(self, answers: dict):
+        """Fold the answers in, then look for another round.
+
+        Skipping sends an empty dict rather than a different signal, because
+        skipping is a real answer to "can you settle any of these" and the
+        pipeline already treats it as one: the round still advances and the
+        markers simply stay.
+        """
+        self._run_step("answers", answers=answers)
 
     def _publish(self):
         from src.podcastnotes import publish
