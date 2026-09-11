@@ -133,6 +133,19 @@ QPushButton:hover {{ background: {sunken}; }}
 QPushButton:pressed {{ background: {border}; }}
 QPushButton:disabled {{ color: {text_faint}; border-color: {border}; }}
 
+/* A checkable button used as a tab. Without this a checked button is drawn
+   exactly like an unchecked one, so a two-way switch shows nothing at all
+   about which side is showing. Found by rendering the screen, not by a test. */
+/* Colour and border only, deliberately not a heavier font. The button sizes
+   itself to its label once, and turning the text bold on check makes it wider
+   than the space already reserved, so the last character clips. */
+QPushButton:checked {{
+    background: {accent_soft};
+    border-color: {accent};
+    color: {accent};
+}}
+QPushButton:checked:hover {{ background: {accent_soft}; }}
+
 QPushButton[role="primary"] {{
     background: {accent};
     border: 1px solid {accent};

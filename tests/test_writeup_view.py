@@ -1,0 +1,285 @@
+"""
+Tests for the write-up screen.
+
+The rule this screen has to keep is the one the attribution module already
+keeps: naming a speaker is a decision, so a suggestion arrives filled in and a
+blank stays blank. A screen that quietly submitted the suggestion for a voice
+somebody skipped would defeat the guarantee underneath it.
+
+The rest is about a person being able to tell what happened: a failure has to
+read as a next move, and the change log has to be legible rather than fifty
+lines nobody reads.
+
+Run with: python -m pytest tests/test_writeup_view.py -v
+"""
+
+import pytest
+
+from src.podcastnotes.attribution import Suggestion, Voice
+from src.podcastnotes.output import Documents
+from src.ui.podcastnotes.writeup_view import WriteUpView, _summarise
+
+
+@pytest.fixture
+def view(qt_app):
+    v = WriteUpView()
+    yield v
+    v.close()
+
+
+def _voice(label, seconds=300.0, share=0.4, lines=None, first=12.0):
+    return Voice(
+        speaker=label,
+        pyannote_label="P0",
+        total_speech_s=seconds,
+        share=share,
+        lines=lines or [f"something {label} said at length about the site"],
+        first_heard=first,
+    )
+
+
+VOICES = [_voice("Speaker 1"), _voice("Speaker 2", seconds=200.0, share=0.3)]
+
+
+# --- naming speakers ----------------------------------------------------------
+
+
+def test_a_suggestion_arrives_filled_in(view):
+    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Marcus Ellery",
+                                          confidence="high", evidence="carries the site facts")])
+
+    assert view._rows[0].chosen == "Marcus Ellery"
+
+
+def test_a_voice_with_no_suggestion_starts_blank(view):
+    view.ask_speakers(VOICES, [])
+
+    assert view._rows[0].chosen == ""
+
+
+def test_confirming_emits_only_the_names_that_were_filled_in(view):
+    """A voice left blank stays unnamed. Submitting the suggestion for it would
+    defeat the guarantee the attribution module makes underneath."""
+    view.ask_speakers(VOICES, [
+        Suggestion("Speaker 1", name="Marcus Ellery"),
+        Suggestion("Speaker 2", name="Anya Petrov-Hale"),
+    ])
+    view._rows[1].name.setText("   ")
+
+    got = {}
+    view.speakers_confirmed.connect(got.update)
+    view._confirm()
+
+    assert got == {"Speaker 1": "Marcus Ellery"}
+
+
+def test_typing_over_a_suggestion_wins(view):
+    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Wrong Person")])
+    view._rows[0].name.setText("Marcus Ellery")
+
+    got = {}
+    view.speakers_confirmed.connect(got.update)
+    view._confirm()
+
+    assert got["Speaker 1"] == "Marcus Ellery"
+
+
+def test_the_count_of_unnamed_voices_is_shown(view):
+    view.ask_speakers(VOICES, [Suggestion("Speaker 1", name="Marcus")])
+
+    assert "1 voice left unnamed" in view.unnamed.text()
+
+
+def test_no_count_is_shown_once_everything_is_named(view):
+    view.ask_speakers(VOICES, [
+        Suggestion("Speaker 1", name="Marcus"),
+        Suggestion("Speaker 2", name="Anya"),
+    ])
+
+    assert view.unnamed.text() == ""
+
+
+def test_a_barely_speaking_voice_is_called_out(view):
+    """The diarizer inventing a person is common enough that the screen should
+    say so rather than leaving somebody to wonder who the fourth person was."""
+    view.ask_speakers([_voice("Speaker 4", seconds=21.8, share=0.01)], [])
+
+    texts = [c.text() for c in view._rows[0].findChildren(type(view.unnamed))]
+    assert any("inventing a person" in t for t in texts)
+
+
+def test_a_substantial_voice_is_not_called_out(view):
+    view.ask_speakers([_voice("Speaker 1", seconds=900.0)], [])
+
+    texts = [c.text() for c in view._rows[0].findChildren(type(view.unnamed))]
+    assert not any("inventing a person" in t for t in texts)
+
+
+def test_asking_twice_does_not_stack_the_previous_voices(view):
+    view.ask_speakers(VOICES, [])
+    view.ask_speakers(VOICES, [])
+
+    assert len(view._rows) == 2
+
+
+def test_playing_a_voice_asks_for_its_own_moment(view):
+    view.ask_speakers([_voice("Speaker 3", first=412.5)], [])
+
+    got = []
+    view._rows[0].play_requested.connect(got.append)
+    view._rows[0]._play()
+
+    assert got == [412.5]
+
+
+# --- waiting and failing ------------------------------------------------------
+
+
+def test_the_waiting_pane_says_what_is_happening(view):
+    view.working("Reading the background for this trip", "Looking up: Lanternfish")
+
+    assert view.panes.currentIndex() == 0
+    assert view.stage.text() == "Reading the background for this trip"
+    assert view.detail.text() == "Looking up: Lanternfish"
+
+
+def test_a_failure_offers_a_way_forward(view):
+    """`isHidden` rather than `isVisible`, because an offscreen widget whose
+    window was never shown reports invisible either way, so the visible check
+    would pass no matter what this method did."""
+    view.working("Reading the background for this trip")
+
+    view.on_failed("Your sign-in has expired. Sign in again on the setup screen.")
+
+    assert view.problem.isHidden() is False
+    assert view.retry.isHidden() is False
+    assert "expired" in view.problem.text()
+    assert view.bar.isHidden() is True, "a spinner kept running under a failure"
+
+
+def test_the_retry_button_asks_the_window_to_try_again(view):
+    view.on_failed("Something went wrong.")
+
+    fired = []
+    view.retry_requested.connect(lambda: fired.append(True))
+    view.retry.click()
+
+    assert fired == [True]
+
+
+def test_starting_a_new_step_clears_the_last_failure(view):
+    """Otherwise a stale error sits under a running step and reads as though
+    the retry failed too."""
+    view.on_failed("Something went wrong.")
+
+    view.working("Working out who is speaking")
+
+    assert view.problem.isHidden()
+    assert view.retry.isHidden()
+
+
+# --- the finished documents ---------------------------------------------------
+
+
+def test_the_documents_pane_summarises_the_changes(view):
+    view.show_documents(Documents(transcript="t", summary="s"),
+                        notes=["Corrected: a -> b (2x)", "Flagged: c -> d (1x)"])
+
+    assert view.panes.currentIndex() == 2
+    assert "1 correction applied" in view.changes.text()
+    assert "1 marked as uncertain" in view.changes.text()
+
+
+def test_dropped_markers_are_warned_about(view):
+    """An uncertain term that did not survive into the document has quietly
+    become a fact, which is the one thing worth interrupting somebody for."""
+    view.show_documents(Documents(transcript="t", summary="s",
+                                  dropped_markers=["Errol Marchetti"]))
+
+    assert view.warnings.isHidden() is False
+    assert "Errol Marchetti" in view.warnings.text()
+
+
+def test_no_warning_when_every_marker_survived(view):
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    assert view.warnings.isHidden()
+
+
+def test_a_clean_run_says_so_rather_than_showing_nothing():
+    assert _summarise([]) == "No corrections were needed."
+
+
+def test_held_back_corrections_are_explained_not_just_counted():
+    text = _summarise(["Held back for review: a -> b"])
+
+    assert "removed words" in text
+
+
+def test_the_change_log_is_counted_rather_than_listed():
+    """A real trip produces around fifty of these and nobody reads a list that
+    long, so the counts go on screen and the detail goes in the file."""
+    notes = [f"Corrected: term{i} -> fixed{i} (1x)" for i in range(50)]
+
+    text = _summarise(notes)
+
+    assert "50 corrections applied" in text
+    assert "term7" not in text
+
+
+# --- reading the documents before publishing ----------------------------------
+
+
+def test_the_summary_is_shown_first(view):
+    """A screen that reports "49 corrections applied" and shows none of the
+    result is asking to be trusted rather than checked."""
+    view.show_documents(Documents(transcript="THE TRANSCRIPT", summary="THE SUMMARY"))
+
+    assert "THE SUMMARY" in view.document.toPlainText()
+    assert view.show_summary.isChecked() is True
+
+
+def test_the_transcript_can_be_read_too(view):
+    view.show_documents(Documents(transcript="THE TRANSCRIPT", summary="THE SUMMARY"))
+
+    view.show_transcript.click()
+
+    assert "THE TRANSCRIPT" in view.document.toPlainText()
+    assert view.show_transcript.isChecked() is True
+    assert view.show_summary.isChecked() is False, "both tabs looked selected at once"
+
+
+def test_switching_back_works(view):
+    view.show_documents(Documents(transcript="THE TRANSCRIPT", summary="THE SUMMARY"))
+    view.show_transcript.click()
+
+    view.show_summary.click()
+
+    assert "THE SUMMARY" in view.document.toPlainText()
+
+
+def test_markdown_is_rendered_rather_than_shown_raw(view):
+    view.show_documents(Documents(transcript="t", summary="# A heading\n\nSome text."))
+
+    shown = view.document.toPlainText()
+    assert "A heading" in shown
+    assert "#" not in shown
+
+
+def test_the_heading_stops_saying_it_is_still_working(view):
+    """Left as it was, the finished screen reads as though the job is still
+    running and the publish button is premature."""
+    view.working("Writing the transcript and the summary")
+
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    assert view.title.text() == "Ready to publish"
+
+
+def test_the_heading_goes_back_when_a_later_step_runs(view):
+    """A retry after publishing failed must not still say "Ready to publish"."""
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    view.working("Applying your answers")
+
+    assert view.title.text() == "Writing this up"

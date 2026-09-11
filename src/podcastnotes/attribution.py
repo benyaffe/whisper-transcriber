@@ -82,6 +82,10 @@ class Voice:
     total_speech_s: float = 0.0
     share: float = 0.0
     lines: list = field(default_factory=list)
+    # Where to start playing to hear this voice. The longest turn rather than
+    # the first, for the same reason the sample lines are: an opening "yeah,
+    # exactly" is not enough of anybody to recognise.
+    first_heard: float = 0.0
 
     @property
     def is_slight(self) -> bool:
@@ -134,6 +138,7 @@ def voices(payload: dict, sample_lines: int = SAMPLE_LINES) -> list:
                 total_speech_s=round(spoken[label], 1),
                 share=round(spoken[label] / total, 3),
                 lines=[(r.get("text") or "").strip() for r in longest[:sample_lines]],
+                first_heard=float(longest[0].get("start") or 0.0) if longest else 0.0,
             )
         )
     out.sort(key=lambda v: v.total_speech_s, reverse=True)

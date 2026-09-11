@@ -20,6 +20,8 @@ from src.ui.podcastnotes.intake_view import IntakeView
 from src.ui.podcastnotes.run_view import RunView
 from src.ui.podcastnotes.setup_view import SetupView
 from src.ui.podcastnotes.trip_worker import TripWorker
+from src.ui.podcastnotes.writeup_view import WriteUpView
+from src.ui.podcastnotes.writeup_worker import WriteUpWorker
 from src.utils.file_utils import check_ffmpeg_health
 from src.utils.logger import get_logger
 
@@ -38,6 +40,10 @@ class MainWindow(QMainWindow):
 
         self._logger = get_logger()
         self.worker = None
+        self.trip = None
+        self.writeup = None
+        self.writeup_worker = None
+        self._last_step = "context"
         self._stall_timer = None
         self._stall_warned = False
 
@@ -53,10 +59,17 @@ class MainWindow(QMainWindow):
         self.run_view.cancel_requested.connect(self._cancel_trip)
         self.run_view.new_trip_requested.connect(self._show_intake)
 
+        self.writeup_view = WriteUpView()
+        self.writeup_view.speakers_confirmed.connect(self._speakers_confirmed)
+        self.writeup_view.publish_requested.connect(self._publish)
+        self.writeup_view.new_trip_requested.connect(self._show_intake)
+        self.writeup_view.retry_requested.connect(self._retry_writeup)
+
         self.stack = QStackedWidget()
         self.stack.addWidget(self.setup_view)
         self.stack.addWidget(self.intake)
         self.stack.addWidget(self.run_view)
+        self.stack.addWidget(self.writeup_view)
         # Stated rather than left to insertion order. Whether the checklist
         # takes the screen is check_setup_on_launch's decision and nothing
         # else's, and a stack that quietly defaults to it would make that
@@ -158,6 +171,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Cannot start", str(e))
             return
 
+        # Kept, because the write-up needs the description the person typed and
+        # it is the only place that text survives after this method returns.
+        self.trip = trip
         self._logger.info(f"Starting trip '{name}' with {len(sources)} source(s)")
         self.run_view.begin(name, len(sources))
         self.stack.setCurrentWidget(self.run_view)
@@ -187,6 +203,88 @@ class MainWindow(QMainWindow):
         self._stop_stall_watch()
         self._logger.info(f"Trip finished: {outputs.work_dir}")
         self.run_view.on_finished(outputs)
+        self._start_writeup(outputs)
+
+    # --- writing it up --------------------------------------------------------
+
+    def _start_writeup(self, outputs):
+        """Carry straight on into the write-up rather than stopping at the files.
+
+        No button in between, because the transcript on its own is not what
+        anybody came for and asking somebody to discover a second phase is how
+        the twenty-minute promise turns into a two-hour one. A write-up that
+        cannot start says so on its own screen, and the transcript is already
+        saved either way.
+        """
+        payload = _read_json(getattr(outputs, "json_path", ""))
+        if not payload:
+            self._logger.warning("No segment export, so there is nothing to write up.")
+            return
+
+        from src.podcastnotes.pipeline import WriteUp
+
+        self.writeup = WriteUp.resume(
+            outputs.work_dir, payload,
+            boundaries=_read_json(getattr(outputs, "boundaries_path", "")),
+        )
+        self.writeup.description = getattr(self.trip, "description", "") or ""
+        self.writeup_view.set_audio(getattr(outputs, "audio_path", ""))
+        self.stack.setCurrentWidget(self.writeup_view)
+        self._run_step("context")
+
+    def _run_step(self, step: str, answers: dict = None):
+        self._last_step = step
+        self.writeup_worker = WriteUpWorker(self.writeup, step, answers=answers)
+        # Here rather than only at the start, so that retrying after a failure
+        # cannot leave the progress and the error on a screen nobody is looking
+        # at.
+        self.stack.setCurrentWidget(self.writeup_view)
+        self.writeup_view.working(self.writeup_worker.label)
+        self.writeup_worker.progress.connect(self.writeup_view.note)
+        self.writeup_worker.failed.connect(self.writeup_view.on_failed)
+        self.writeup_worker.completed.connect(
+            lambda result, done=step: self._step_finished(done, result)
+        )
+        self.writeup_worker.start()
+
+    def _retry_writeup(self):
+        """Whatever failed, try that same step again rather than starting over.
+
+        Every one of the failures this screen reports is transient: a sign-in
+        that expired, a search that could not be reached. Restarting the whole
+        write-up would discard a context map that took minutes to build.
+        """
+        self._run_step(getattr(self, "_last_step", "context"))
+
+    def _step_finished(self, step: str, result):
+        if step == "context":
+            self.writeup.apply_corrections()
+            self._run_step("speakers")
+        elif step == "speakers":
+            self.writeup_view.ask_speakers(
+                self.writeup.voices(), suggestions=result or []
+            )
+        elif step == "answers":
+            self._run_step("questions")
+        elif step == "questions":
+            # No screen for the rounds yet, and skipping is always allowed, so
+            # an unanswered round moves the write-up on rather than stalling.
+            self._run_step("write")
+        elif step == "write":
+            self.writeup_view.show_documents(result, notes=self.writeup.notes)
+
+    def _speakers_confirmed(self, names: dict):
+        self.writeup.confirm_speakers(names)
+        self._run_step("questions")
+
+    def _publish(self):
+        from src.podcastnotes import publish
+
+        target = f"{self.writeup.work_dir}/write-up.md"
+        result = publish.publish(
+            f"{self.writeup.summary}\n\n---\n\n{self.writeup.transcript}", target
+        )
+        self._logger.info(f"Published via clipboard: {result}")
 
     def _on_trip_failed(self, message: str):
         self._stop_stall_watch()
@@ -233,3 +331,21 @@ class MainWindow(QMainWindow):
                 f"[Still working. No new speech for {quiet_for / 60:.0f} minutes; "
                 f"long silences and dense audio both look like this.]"
             )
+
+
+def _read_json(path: str) -> dict:
+    """One of the trip's JSON artefacts, or an empty dict if it is not there.
+
+    Missing is normal rather than exceptional: boundaries.json only exists for
+    a trip of more than one recording, and the segment export is absent if
+    transcription was cancelled part way.
+    """
+    import json
+
+    if not path:
+        return {}
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}

@@ -119,6 +119,11 @@ class WriteUp:
         self.save()
         return payload
 
+    def voices(self) -> list:
+        """The speaker labels as a screen needs them: clip offset, share, lines."""
+        self._require(Step.CORRECT)
+        return attribution.voices(self.working())
+
     def speaker_suggestions(self, client=None, library_path: str = "") -> list:
         """Stage 4, the proposing half. Claude first, then the voice library.
 
