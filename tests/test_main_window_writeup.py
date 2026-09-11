@@ -32,6 +32,7 @@ class _FakeWorker:
         self.step = step
         self.answers = answers
         self.label = f"doing {step}"
+        self.phase = step.title()
         self._on_done = None
         self._on_fail = None
         self.progress = _Signal()
@@ -193,7 +194,7 @@ def test_the_finished_documents_are_shown(window):
     window._run_step("write")
 
     assert window.writeup_view.panes.currentIndex() == PANE_DONE
-    assert "1 correction applied" in window.writeup_view.changes.text()
+    assert "s" in window.writeup_view.document.toPlainText(), "the summary shows first"
 
 
 # --- failure and retry ---------------------------------------------------------

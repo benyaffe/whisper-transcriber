@@ -404,3 +404,12 @@ def test_a_settled_marker_echoed_with_brackets_still_supersedes():
     updated = qa.absorb(existing, {"Simone": "Simone Vasari."}, client=client)
 
     assert [e["probably"] for e in updated.likely_errors] == ["Simone Vasari"]
+
+
+def test_the_questions_are_written_about_the_speakers_not_to_them():
+    """The person assembling the write-up is often not on the recording. "Anya,
+    on the tape you say..." addresses the wrong person and reads as though the
+    tool has confused who it is talking to."""
+    assert "third person" in qa.SYSTEM
+    assert "assembling a write-up" in qa.SYSTEM
+    assert "was physically present" not in qa.SYSTEM

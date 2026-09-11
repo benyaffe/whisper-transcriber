@@ -110,8 +110,10 @@ Your job is presentation:
   - Fix punctuation and paragraphing. Drop pure filler that carries no meaning.
   - Merge consecutive turns from the same speaker into continuous paragraphs.
   - Add section headings where the conversation moves to a new site or topic.
-  - Open with a short header giving the trip, the sites in the order discussed, and who was on
-    the recording.
+  - Open with a first-level heading that begins with the word "Transcript", then a short header
+    giving the trip, the sites in the order discussed, and who was on the recording. The summary
+    of the same trip opens almost identically, and landing mid-document with no way to tell them
+    apart is the complaint this heading answers.
 
 Two things are absolute. Do not remove content: this is the whole transcript, reflowed, not a
 summary. And copy every [?marker] through exactly as it appears, brackets and all. A marker means
@@ -128,7 +130,9 @@ SUMMARY_SYSTEM = """You are writing the summary and action items that follow a w
 senior colleague who was on the trip and wants the decisions rather than a retelling.
 
 Produce, in Markdown:
-  - A short header: the trip, the sites in order, who was there, and the purpose.
+  - A first-level heading that begins with the word "Summary", then a short header: the trip,
+    the sites in order, who was there, and the purpose. The transcript of the same trip opens
+    almost identically, so the first line has to say which document this is.
   - "Top-line takeaways": the handful of things that change what the team does next. Lead each
     with the claim in bold, then the evidence for it.
   - A site-by-site or topic-by-topic summary, whichever the recording is actually organised by.

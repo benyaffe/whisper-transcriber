@@ -198,13 +198,24 @@ def test_starting_a_new_step_clears_the_last_failure(view):
 # --- the finished documents ---------------------------------------------------
 
 
-def test_the_documents_pane_summarises_the_changes(view):
+def test_the_finished_screen_does_not_recount_the_corrections(view):
+    """By the time somebody is reading the finished pair, how many
+    substitutions happened three steps ago is not news, and it pushed the thing
+    they came for further down the screen."""
     view.show_documents(Documents(transcript="t", summary="s"),
                         notes=["Corrected: a -> b (2x)", "Flagged: c -> d (1x)"])
 
     assert view.panes.currentIndex() == PANE_DONE
-    assert "1 correction applied" in view.changes.text()
-    assert "1 marked as uncertain" in view.changes.text()
+    assert view.changes.isHidden() is True
+
+
+def test_a_missing_marker_is_still_worth_interrupting_for(view):
+    """The counts go, this stays: a marker that did not survive has quietly
+    become a fact."""
+    view.show_documents(Documents(transcript="t", summary="s",
+                                  dropped_markers=["Errol Marchetti"]))
+
+    assert view.warnings.isHidden() is False
 
 
 def test_dropped_markers_are_warned_about(view):
@@ -340,17 +351,28 @@ def test_only_answered_questions_are_sent(view):
     assert got == {"Kestler": "It is Kessler."}
 
 
-def test_skipping_sends_an_empty_answer_rather_than_nothing(view):
-    """Skipping is a real answer to "can you settle any of these", so the
-    pipeline still advances the round and the markers simply stay."""
-    view.ask_questions(_Round([_Q("Kestler")]))
-    view._questions[0].box.setText("would be ignored")
+def test_leaving_them_all_blank_is_how_you_skip(view):
+    """There is one button now. A separate "Skip these" implied the two were
+    different, and leaving every box empty already did the same thing: the
+    round advances and the markers simply stay."""
+    view.ask_questions(_Round([_Q("Kestler"), _Q("z-lanes")]))
 
     got = []
     view.answers_given.connect(got.append)
-    view.skip.click()
+    view.send_answers.click()
 
     assert got == [{}]
+
+
+def test_the_button_says_which_of_the_two_things_it_will_do(view):
+    """Skipping is allowed, and it should be a thing somebody chose rather
+    than something they did without noticing."""
+    view.ask_questions(_Round([_Q("Kestler")]))
+    assert "Skip" in view.send_answers.text()
+
+    view._questions[0].box.setText("It is Crockett.")
+
+    assert view.send_answers.text() == "Use these answers"
 
 
 def test_the_number_still_waiting_is_shown(view):
@@ -741,3 +763,37 @@ def test_a_new_write_up_does_not_inherit_the_last_publish_message(view):
     view.show_documents(Documents(transcript="t2", summary="s2"))
 
     assert view.published.isHidden() is True
+
+
+def test_the_heading_says_where_in_the_job_it_is(view):
+    view.working("Reading the background for this trip", phase="Background")
+
+    assert view.title.text() == "Background"
+
+
+def test_the_heading_changes_between_phases(view):
+    view.working("Reading the background", phase="Background")
+    first = view.title.text()
+    view.working("Writing the transcript and the summary", phase="Writing")
+
+    assert view.title.text() != first
+
+
+def test_the_round_speaks_in_the_first_person(view):
+    """"Nobody could work out" is the tool talking about itself in the third
+    person. It did the work; it can say so."""
+    view.ask_questions(_Round([_Q("Kestler")]))
+
+    assert "I could not work out" in view.round_blurb.text()
+    assert "nobody" not in view.round_blurb.text().lower()
+
+
+def test_the_preview_says_which_document_is_on_screen(view):
+    """Both open almost identically, and the only signal was which toggle
+    happened to be checked."""
+    view.show_documents(Documents(transcript="T", summary="S"))
+    assert "summary" in view.showing.text().lower()
+
+    view.show_transcript.click()
+
+    assert "transcript" in view.showing.text().lower()

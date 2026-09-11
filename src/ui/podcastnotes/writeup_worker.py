@@ -30,6 +30,18 @@ LABELS = {
     "write": "Writing the transcript and the summary",
 }
 
+# One or two words for the heading, so the screen says where in the job it is
+# rather than standing on "Writing this up" for a quarter of an hour. "This" is
+# nothing anybody can point at, and the same three words through five different
+# stages reads as an app that has stopped.
+PHASES = {
+    "context": "Background",
+    "speakers": "Speakers",
+    "questions": "Questions",
+    "answers": "Questions",
+    "write": "Writing",
+}
+
 
 class WriteUpWorker(QThread):
     """One step of a write-up, on a background thread."""
@@ -53,6 +65,11 @@ class WriteUpWorker(QThread):
     @property
     def label(self) -> str:
         return LABELS.get(self.step, "Working")
+
+    @property
+    def phase(self) -> str:
+        """The heading: where in the job this is, in a word or two."""
+        return PHASES.get(self.step, "Working")
 
     def run(self):
         try:

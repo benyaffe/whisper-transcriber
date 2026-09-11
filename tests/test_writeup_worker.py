@@ -236,3 +236,34 @@ def test_one_result_is_not_reported_as_results(qt_app):
     worker._searched("Anya", 1)
 
     assert "Reading 1 result for" in seen[0]
+
+
+def test_each_step_has_a_short_name_for_the_heading():
+    """"Writing this up" stood on the heading from the first Glean search to
+    the finished pair: a quarter of an hour of a screen that never changes,
+    and a "this" nobody can point at."""
+    from src.ui.podcastnotes.writeup_worker import PHASES
+
+    for step in ("context", "speakers", "questions", "answers", "write"):
+        assert PHASES[step]
+        assert len(PHASES[step].split()) <= 2, f"{step} is not one or two words"
+
+
+def test_the_phase_is_not_the_same_for_every_step():
+    from src.ui.podcastnotes.writeup_worker import PHASES
+
+    assert len(set(PHASES.values())) >= 4
+
+
+def test_answering_is_still_the_questions_phase():
+    """Folding answers in is not a new place to be; it is the same step of the
+    job from the person's side."""
+    from src.ui.podcastnotes.writeup_worker import PHASES
+
+    assert PHASES["answers"] == PHASES["questions"]
+
+
+def test_the_worker_offers_its_phase(qt_app):
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+
+    assert worker.phase == "Background"

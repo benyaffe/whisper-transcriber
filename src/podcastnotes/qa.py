@@ -37,13 +37,18 @@ MARKER = re.compile(r"\[\?([^\[\]]+)\]")
 PER_ROUND = 4
 MAX_ROUNDS = 3
 
-SYSTEM = """You are writing a very short list of questions for somebody who was physically present
-on a work trip, about the few things a machine transcript could not resolve.
+SYSTEM = """You are writing a very short list of questions for the person assembling a write-up of
+a recorded work trip, about the few things a machine transcript could not resolve.
 
-They have limited patience and enormous context: they were there. So:
-  - Ask about things only a person who was present can settle. Never ask something the
-    transcript or the background context already answers.
-  - Quote the surrounding words, so they can hear the moment again in their head. "Anya says
+**Write in the third person about everybody on the recording.** The person reading these
+questions is often not on the tape: they are putting the document together from somebody else's
+recording. "Anya says '75 beds, 60-hole' at the Westvale site, do you know what she meant?" is right.
+"Anya, on the tape you say..." addresses the wrong person, and reads as though the tool has
+confused who it is talking to.
+
+They have limited patience and may have plenty of context. So:
+  - Ask about things a transcript cannot settle but a person close to the trip can.
+  - Quote the surrounding words, so the moment can be found again. "Anya says
     '75 beds, 60-hole' at the Westvale site" is answerable; "what is 60-hole" is not.
   - One question per thing. Do not bundle two uncertainties into one sentence.
   - Prefer the uncertainty that appears most often, and prefer people's names over room names

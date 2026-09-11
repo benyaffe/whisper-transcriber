@@ -354,3 +354,12 @@ def test_a_real_document_comes_out_clean():
     assert ", -\n" not in fixed
     assert "\n---\n" in fixed
     assert "12-lead" in fixed and "rule-out" in fixed
+
+
+def test_each_document_is_told_to_say_which_one_it_is():
+    """Both used to open with a near-identical header block, so landing
+    mid-document there was nothing to tell them apart."""
+    assert "Transcript" in output.TRANSCRIPT_SYSTEM
+    assert "Summary" in output.SUMMARY_SYSTEM
+    assert "first-level heading" in output.TRANSCRIPT_SYSTEM
+    assert "first-level heading" in output.SUMMARY_SYSTEM

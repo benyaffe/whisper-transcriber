@@ -297,15 +297,10 @@ class WriteUpView(QWidget):
         layout.addWidget(area, 1)
 
         row = QHBoxLayout()
-        # Skipping is a first-class action, not a way out of a form, so it is a
-        # button rather than an empty box and a shrug. Every question left
-        # unanswered simply keeps its uncertainty marker, which is an honest
-        # outcome and the reason the markers exist at all.
-        self.skip = QPushButton("Skip these")
-        role(self.skip, "quiet")
-        self.skip.clicked.connect(lambda: self.answers_given.emit({}))
-        row.addWidget(self.skip)
         row.addStretch(1)
+        # One button. Skipping is leaving every box empty and pressing this,
+        # which is what it already did: a separate "Skip these" implied the two
+        # were different and invited somebody to hunt for the difference.
         self.send_answers = QPushButton("Use these answers")
         role(self.send_answers, "primary")
         self.send_answers.clicked.connect(self._send_answers)
@@ -345,6 +340,10 @@ class WriteUpView(QWidget):
         switch.addStretch(1)
         layout.addLayout(switch)
 
+        self.showing = QLabel("")
+        role(self.showing, "muted")
+        layout.addWidget(self.showing)
+
         self.document = QTextBrowser()
         self.document.setOpenExternalLinks(True)
         layout.addWidget(self.document, 1)
@@ -376,9 +375,15 @@ class WriteUpView(QWidget):
     def set_audio(self, path: str):
         self._audio_path = path or ""
 
-    def working(self, stage: str, detail: str = ""):
-        """Show a long step running, and clear any previous failure."""
-        self.title.setText("Writing this up")
+    def working(self, stage: str, detail: str = "", phase: str = ""):
+        """Show a long step running, and clear any previous failure.
+
+        `phase` is the heading. It used to read "Writing this up" for every
+        stage from the first Glean search to the finished pair, which is a
+        quarter of an hour of a screen that never changes and a "this" nobody
+        can point at.
+        """
+        self.title.setText(phase or "Writing this up")
         self.stage.setText(stage)
         self.detail.setText(detail)
         self.problem.hide()
@@ -465,16 +470,26 @@ class WriteUpView(QWidget):
         left = (f" There are {round_.remaining} more that could be asked after this."
                 if round_.remaining else "")
         self.round_blurb.setText(
-            f"A few things nobody could work out from the recording. Answer what you "
-            f"can and leave the rest.{left}"
+            f"A few things I could not work out from the recording. Answer what you "
+            f"can and leave the rest blank.{left}"
         )
 
         for question in round_.questions:
-            self._questions.append(_QuestionBox(question, self._question_holder))
+            box = _QuestionBox(question, self._question_holder)
+            box.box.textChanged.connect(self._count_answers)
+            self._questions.append(box)
             self._question_layout.insertWidget(
-                self._question_layout.count() - 1, self._questions[-1]
+                self._question_layout.count() - 1, box
             )
+        self._count_answers()
         self.panes.setCurrentIndex(PANE_QUESTIONS)
+
+    def _count_answers(self):
+        """Say what the button will do, since leaving them blank is allowed."""
+        answered = sum(1 for box in self._questions if box.answer)
+        self.send_answers.setText(
+            "Use these answers" if answered else "Skip these, none of them are mine"
+        )
 
     def _send_answers(self):
         self.answers_given.emit({
@@ -488,7 +503,13 @@ class WriteUpView(QWidget):
         # written. Left as it was, the finished screen reads as though the job
         # is still running and the buttons are premature.
         self.title.setText("Ready to publish")
-        self.changes.setText(_summarise(notes or []))
+        # No correction counts. By the time somebody is reading the finished
+        # pair, how many substitutions were made three steps ago is not news,
+        # and it pushed the thing they came for further down the screen. What
+        # is still worth interrupting for is a marker that went missing, which
+        # is below.
+        self.changes.setText("")
+        self.changes.hide()
         trouble = []
         if documents.dropped_markers:
             trouble.append(
@@ -535,6 +556,11 @@ class WriteUpView(QWidget):
         self.show_summary.setChecked(which == "summary")
         self.show_transcript.setChecked(which == "transcript")
         text = documents.summary if which == "summary" else documents.transcript
+        self.showing.setText(
+            "The summary and action items, for somebody who was not there."
+            if which == "summary"
+            else "The full transcript, reflowed and with the speakers named."
+        )
         self.document.setMarkdown(text or "")
 
     # --- internals ------------------------------------------------------------

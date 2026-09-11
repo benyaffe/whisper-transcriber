@@ -255,7 +255,9 @@ class MainWindow(QMainWindow):
         # cannot leave the progress and the error on a screen nobody is looking
         # at.
         self.stack.setCurrentWidget(self.writeup_view)
-        self.writeup_view.working(self.writeup_worker.label)
+        self.writeup_view.working(
+            self.writeup_worker.label, phase=self.writeup_worker.phase
+        )
         self.writeup_worker.progress.connect(self.writeup_view.note)
         self.writeup_worker.failed.connect(self.writeup_view.on_failed)
         self.writeup_worker.completed.connect(
