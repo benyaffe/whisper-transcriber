@@ -98,14 +98,33 @@ def test_a_stale_blocked_row_above_a_failure_is_still_skipped(qt_app):
         view.deleteLater()
 
 
-def test_several_failures_say_the_others_may_clear_up(qt_app):
+def test_several_unrelated_failures_do_not_promise_a_cascade(qt_app):
+    """These two do not depend on each other, so fixing the first cannot fix
+    the second, and saying it might sends somebody back to a list that has not
+    moved. A cold machine hits exactly this: HuggingFace and Glean."""
     view = build(qt_app, [
         stub("a", failed("x"), title="First"),
         stub("b", failed("y"), title="Second"),
     ])
     try:
         assert "2 things" in view.summary.text()
-        assert "clear up" in view.summary.text()
+        assert "unrelated" in view.summary.text()
+        assert "clear up" not in view.summary.text()
+    finally:
+        view.deleteLater()
+
+
+def test_a_dependent_check_is_not_counted_as_a_second_failure(qt_app):
+    """A check waiting on a failed one is BLOCKED, not FAILED, so it does not
+    add to the number quoted. That is why the count and the promise about the
+    others have to be worked out separately."""
+    view = build(qt_app, [
+        stub("a", failed("x"), title="First"),
+        stub("b", failed("y"), title="Second", requires=["a"]),
+    ])
+    try:
+        assert "One thing needs sorting out" in view.summary.text()
+        assert "First" in view.summary.text()
     finally:
         view.deleteLater()
 
@@ -599,3 +618,42 @@ def test_anything_typed_counts_as_input(qt_app, field, tmp_path):
         assert view.has_input() is True
     finally:
         view.deleteLater()
+
+
+# --- what the summary line promises ---------------------------------------------
+
+
+def _failing(*keys):
+    """Results where the named checks failed and the rest passed."""
+    from src.podcastnotes.readiness import failed, ok
+    from src.ui.podcastnotes.setup_view import ALL_CHECKS
+
+    return {
+        c.key: (failed("broken", remedy="fix it") if c.key in keys else ok("fine"))
+        for c in ALL_CHECKS
+    }
+
+
+def test_two_unrelated_failures_do_not_promise_a_cascade(qt_app):
+    """A cold machine fails HuggingFace and Glean, which do not depend on each
+    other. Telling somebody the second may clear up once the first works sends
+    them back to a list that has not moved."""
+    view = SetupView()
+    try:
+        text = view._summary_text(_failing("huggingface", "glean"))
+    finally:
+        view.close()
+
+    assert "unrelated" in text
+    assert "may clear up" not in text
+
+
+def test_one_failure_names_it_and_nothing_else(qt_app):
+    view = SetupView()
+    try:
+        text = view._summary_text(_failing("glean"))
+    finally:
+        view.close()
+
+    assert "One thing needs sorting out" in text
+    assert "may clear up" not in text

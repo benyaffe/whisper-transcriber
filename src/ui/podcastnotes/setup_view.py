@@ -290,9 +290,30 @@ class SetupView(QWidget):
         title = self.rows[first].check.title
         if broken == 1:
             return f"One thing needs sorting out: <b>{title}</b>."
+
+        # "The others may clear up once it works" is only true when something
+        # is actually waiting on this one. Google failing and blocking Claude
+        # is that case. HuggingFace and Glean failing together is not, and a
+        # cold machine produces exactly that pair: sending somebody off to fix
+        # one and back to a list that has not moved is worse than saying
+        # nothing.
+        #
+        # Blocked checks are what make this worth distinguishing. They are not
+        # counted as broken, so the thing that will clear up is usually not in
+        # the number quoted.
+        waiting = any(
+            first in (row.check.requires or [])
+            for key, row in self.rows.items()
+            if row.result is not None and row.result.state in (State.BLOCKED, State.FAILED)
+        )
+        if waiting:
+            return (
+                f"{broken} things need sorting out. Start with <b>{title}</b>; "
+                f"the others may clear up once it works."
+            )
         return (
-            f"{broken} things need sorting out. Start with <b>{title}</b>; "
-            f"the others may clear up once it works."
+            f"{broken} things need sorting out, and they are unrelated. "
+            f"Any order is fine."
         )
 
     # --- fixing ----------------------------------------------------------------
