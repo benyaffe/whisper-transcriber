@@ -282,3 +282,14 @@ def test_write_works_without_a_context_map():
     client = _FakeClient("t", "s")
 
     assert output.write(PAYLOAD, None, client=client).transcript == "t"
+
+
+def test_both_writers_are_told_to_leave_the_process_out():
+    """A real defect from the real run. The background context for a trip that
+    was written up once already contains notes about that earlier pass, because
+    published documents get indexed alongside everything else, and the summary
+    opened with a paragraph about which transcription pass split which speaker
+    label. Accurate, faithfully reported, and of no interest to anybody reading
+    a trip summary."""
+    for system in (output.TRANSCRIPT_SYSTEM, output.SUMMARY_SYSTEM):
+        assert "how the transcript was made" in system

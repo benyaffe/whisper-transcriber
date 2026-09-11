@@ -107,6 +107,11 @@ Two things are absolute. Do not remove content: this is the whole transcript, re
 summary. And copy every [?marker] through exactly as it appears, brackets and all. A marker means
 nobody could confirm that word, so tidying it away turns an honest flag into an invented fact.
 
+The header block describes the trip and never how the transcript was made. The background
+context can contain notes from an earlier write-up of this same trip, because those get published
+and then indexed alongside everything else, and it is easy to repeat one as though it belonged
+here. Nobody wants a paragraph about transcription passes or speaker-label policy.
+
 Output Markdown and nothing else."""
 
 SUMMARY_SYSTEM = """You are writing the summary and action items that follow a work trip, for a
@@ -125,6 +130,11 @@ wording matters. Do not invent an owner, a date or a figure that was not said.
 
 Copy any [?marker] through exactly as it appears. It means nobody could confirm that word, and
 stating it cleanly in a summary is how an uncertain name becomes a fact somebody acts on.
+
+Write about the trip, never about how the transcript was made. The background context can
+contain notes from an earlier write-up of this same trip, because those get published and then
+indexed alongside everything else, and it is easy to repeat one as though it were a finding.
+Nobody reading this wants a paragraph about transcription passes or speaker-label policy.
 
 Output Markdown and nothing else."""
 
