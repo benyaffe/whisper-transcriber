@@ -209,3 +209,58 @@ def test_no_user_facing_string_still_says_the_old_name():
                 offenders.append(f"{path.relative_to(root)}:{number}")
 
     assert offenders == [], f"old name in a user-facing string: {offenders}"
+
+
+# --- the theme reaches every widget ---------------------------------------------
+
+
+def test_no_widget_sets_its_own_stylesheet():
+    """An inline stylesheet beats the application one on exactly the widget it
+    is set on, so a single stray call silently exempts that widget from the
+    theme. This is the property the whole tokens-in-a-dict approach rests on."""
+    import pathlib
+
+    root = pathlib.Path(__file__).parent.parent
+    offenders = [
+        f"{p.relative_to(root)}:{n}"
+        for p in (root / "src").rglob("*.py")
+        if p.name != "theme.py"
+        for n, line in enumerate(p.read_text().splitlines(), 1)
+        if "setStyleSheet" in line and not line.strip().startswith("#")
+    ]
+
+    assert offenders == [], f"inline styling escapes the theme: {offenders}"
+
+
+def test_the_transcript_pane_is_styled_from_the_same_tokens():
+    """A QTextBrowser lays out with Qt's rich-text engine, so the application
+    stylesheet does not reach inside it. Its colours were written out by hand,
+    which made it the one widget that ignored any change to the theme."""
+    from src.ui.theme import TOKENS, document_stylesheet
+
+    css = document_stylesheet()
+
+    assert TOKENS["accent"] in css
+    assert TOKENS["text_muted"] in css
+    assert TOKENS["warning"] in css
+    assert "#2962ff" not in css, "an old hardcoded colour survived"
+
+
+def test_the_transcript_pane_actually_uses_it(qt_app):
+    from src.ui.theme import TOKENS
+    from src.ui.widgets import ClickablePreview
+
+    view = ClickablePreview()
+    try:
+        assert TOKENS["accent"] in view.document().defaultStyleSheet()
+    finally:
+        view.close()
+
+
+def test_changing_a_token_moves_the_transcript_pane_too(monkeypatch):
+    """The point of the exercise: one value, every screen."""
+    from src.ui import theme
+
+    monkeypatch.setitem(theme.TOKENS, "accent", "#ff0000")
+
+    assert "#ff0000" in theme.document_stylesheet()

@@ -104,27 +104,14 @@ class ClickablePreview(QTextBrowser):
         self.setOpenLinks(False)
         self.anchorClicked.connect(self._handle_anchor)
 
-        # Set document stylesheet for timestamp styling (this actually works in QTextBrowser)
-        # Note: Use Menlo as primary - it's guaranteed on macOS
-        self.document().setDefaultStyleSheet("""
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                font-size: 13px;
-            }
-            a.ts {
-                font-family: Menlo, Monaco, Courier;
-                color: #2962ff;
-                text-decoration: none;
-            }
-            .status {
-                color: #666;
-                font-style: italic;
-            }
-            .warning {
-                color: #c90;
-                font-style: italic;
-            }
-        """)
+        # A QTextBrowser lays its content out with Qt's rich-text engine, so
+        # the application stylesheet does not reach inside it and it needs its
+        # own. Generated from the same tokens as everything else: the colours
+        # used to be written out here by hand, which made this the one widget
+        # that ignored any change to the theme.
+        from src.ui.theme import document_stylesheet
+
+        self.document().setDefaultStyleSheet(document_stylesheet())
 
     def _handle_anchor(self, url: QUrl):
         """Handle timestamp link clicks."""

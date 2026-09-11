@@ -253,8 +253,44 @@ QMenu::item:selected {{ background: {accent_soft}; }}
 """
 
 
+# QTextBrowser lays its content out with Qt's rich-text engine, not with the
+# widget stylesheet, so nothing in STYLESHEET above reaches inside one. It
+# needs its own sheet, set on the document, and that sheet understands only a
+# small subset of CSS: no variables, no custom properties, and selectors
+# limited to tags and classes.
+#
+# It is generated from the same tokens anyway, because the alternative is what
+# was here before: a transcript pane with its own hardcoded blue and its own
+# hardcoded grey, quietly ignoring every change made to this file.
+DOCUMENT_STYLESHEET = """
+body {{
+    font-family: {font};
+    font-size: {size_body};
+    color: {text};
+}}
+a.ts {{
+    font-family: Menlo, Monaco, Courier;
+    color: {accent};
+    text-decoration: none;
+}}
+.status {{
+    color: {text_muted};
+    font-style: italic;
+}}
+.warning {{
+    color: {warning};
+    font-style: italic;
+}}
+"""
+
+
 def stylesheet() -> str:
     return STYLESHEET.format(**TOKENS)
+
+
+def document_stylesheet() -> str:
+    """The sheet for a QTextBrowser's document, from the same tokens."""
+    return DOCUMENT_STYLESHEET.format(**TOKENS)
 
 
 def apply(app):
