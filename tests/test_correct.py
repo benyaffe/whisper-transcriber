@@ -309,6 +309,77 @@ def test_a_correction_that_matched_nothing_is_reported_not_dropped():
     assert result.changes == []
 
 
+def test_parallel_slash_lists_are_paired_rather_than_pasted_whole():
+    """Found by running the real map against the real transcript. Using the
+    whole right-hand side for every variant put the literal string
+    "Helivar / the Helivar trial" into the transcript."""
+    payload = _payload("abnormal trope was the concern")
+
+    result = correct.apply(payload, ContextMap(likely_errors=[
+        _err("trope / abnormal trope", "troponin / abnormal troponin"),
+    ]))
+
+    assert result.payload["segments"][0]["text"] == "abnormal troponin was the concern"
+
+
+def test_a_single_candidate_serves_every_heard_variant():
+    payload = _payload("Dr. Ives Vahalee and later Avi")
+
+    result = correct.apply(payload, ContextMap(likely_errors=[
+        _err("Dr. Ives Vahalee / Avi", "Dr. Idris Vahali"),
+    ]))
+
+    assert result.payload["segments"][0]["text"] == "Dr. Idris Vahali and later Dr. Idris Vahali"
+
+
+def test_mismatched_list_lengths_fall_back_to_the_first_candidate():
+    payload = _payload("we were in the recess room")
+
+    result = correct.apply(payload, ContextMap(likely_errors=[
+        _err("we were in the recess room", "the resus room / resuscitation area", "medium"),
+    ]))
+
+    assert result.payload["segments"][0]["text"] == "[?the resus room]"
+
+
+def test_a_substitution_that_would_delete_words_is_held_back():
+    """The map's pairs describe an error and only usually also replace it.
+    Applying this one drops "They have" and "through the ED" from the
+    transcript, which no reader would ever detect."""
+    payload = _payload("They have 1 to 200 a day through the ED, which we multiply out.")
+
+    result = correct.apply(payload, ContextMap(likely_errors=[
+        _err("They have 1 to 200 a day through the ED", "100 to 200 a day"),
+    ]))
+
+    assert result.payload["segments"][0]["text"].startswith("They have 1 to 200")
+    assert [c.heard for c in result.held_back] == ["They have 1 to 200 a day through the ED"]
+
+
+def test_a_short_phrase_is_exempt_from_the_content_loss_guard():
+    """A single long word replaced by a short acronym fails the length ratio
+    badly and is completely correct. The guard is about phrases losing words,
+    not about words getting shorter, so it only applies once there are enough
+    words for something to go missing inside."""
+    payload = _payload("they ran an electrocardiogram first")
+
+    result = correct.apply(payload, ContextMap(likely_errors=[_err("electrocardiogram", "ECG")]))
+
+    assert result.payload["segments"][0]["text"] == "they ran an ECG first"
+    assert result.held_back == []
+
+
+def test_an_ordinary_shortening_is_not_held_back():
+    """"12th lead" to "12-lead" is shorter and entirely correct. A guard that
+    caught those would defeat the stage."""
+    payload = _payload("the 12th lead is done up front")
+
+    result = correct.apply(payload, ContextMap(likely_errors=[_err("the 12th lead is done", "the 12-lead is done")]))
+
+    assert "12-lead" in result.payload["segments"][0]["text"]
+    assert result.held_back == []
+
+
 def test_the_original_payload_is_left_alone():
     """A caller showing a before and after has no other way back."""
     payload = _payload("Ridgelane Health", _words((" Ridgelane", 1.0, 1.5)))

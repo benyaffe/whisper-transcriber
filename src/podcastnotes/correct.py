@@ -45,6 +45,16 @@ MIN_VARIANT = 3
 # The context map writes alternatives as "trope / abnormal trope".
 VARIANT_SPLIT = re.compile(r"\s*/\s*")
 
+# A replacement shorter than this fraction of what it replaces is deleting
+# words rather than correcting them, so it is held back for a person instead.
+#
+# Real example, and the reason this exists: the map paired "They have 1 to 200
+# a day through the ED" with "100 to 200 a day". The correction is right and
+# the substitution is not, because applying it drops "They have" and "through
+# the ED" out of the transcript entirely. The map's pairs are descriptions of
+# an error, and only usually also minimal replacements for it.
+MIN_LENGTH_RATIO = 0.5
+
 
 @dataclass
 class Change:
@@ -65,6 +75,7 @@ class Correction:
     payload: dict
     changes: list = field(default_factory=list)
     unmatched: list = field(default_factory=list)
+    held_back: list = field(default_factory=list)
 
     @property
     def applied(self) -> int:
@@ -83,6 +94,7 @@ def apply(payload: dict, context_map) -> Correction:
 
     changes = []
     unmatched = []
+    held_back = []
 
     for proposal in _proposals(context_map):
         change = Change(
@@ -91,6 +103,9 @@ def apply(payload: dict, context_map) -> Correction:
             confidence=proposal["confidence"],
             marked=proposal["marked"],
         )
+        if _would_delete_content(proposal):
+            held_back.append(change)
+            continue
         for index, segment in enumerate(segments):
             hits = _apply_to_segment(segment, proposal)
             if hits:
@@ -101,7 +116,20 @@ def apply(payload: dict, context_map) -> Correction:
         else:
             unmatched.append(change)
 
-    return Correction(corrected, changes, unmatched)
+    return Correction(corrected, changes, unmatched, held_back)
+
+
+def _would_delete_content(proposal: dict) -> bool:
+    """Whether applying this would remove words rather than fix them.
+
+    Only meaningful for phrases. A short correction is normally a shortening,
+    "12th lead" to "12-lead", and holding those back would defeat the stage.
+    """
+    heard = proposal["heard"]
+    if len(heard.split()) < 4:
+        return False
+    replacement = proposal["replacement"].strip("[?]")
+    return len(replacement) < len(heard) * MIN_LENGTH_RATIO
 
 
 def _proposals(context_map) -> list:
@@ -119,12 +147,12 @@ def _proposals(context_map) -> list:
             continue
         confidence = (row.get("confidence") or "").strip().lower()
         marked = confidence != CONFIDENT
-        replacement = f"[?{probably}]" if marked else probably
 
-        for variant in VARIANT_SPLIT.split(heard):
-            variant = variant.strip()
+        heard_variants = [v.strip() for v in VARIANT_SPLIT.split(heard) if v.strip()]
+        for variant, candidate in _pair(heard_variants, probably):
             if len(variant) < MIN_VARIANT:
                 continue
+            replacement = f"[?{candidate}]" if marked else candidate
             out.append(
                 {
                     "heard": variant,
@@ -137,6 +165,28 @@ def _proposals(context_map) -> list:
 
     out.sort(key=lambda p: len(p["heard"]), reverse=True)
     return out
+
+
+def _pair(heard_variants: list, probably: str) -> list:
+    """Line up each heard variant with the replacement meant for it.
+
+    Both sides of the map can carry a slash-separated list, and when they do
+    they are parallel: "trope / abnormal trope" against "troponin / abnormal
+    troponin". Using the whole right-hand side for every variant put the
+    literal string "Helivar / the Helivar trial / the Helivar room" into
+    the transcript three times, which is how this was found.
+
+    When the two sides are different lengths there is no pairing to be had, so
+    the first candidate is used for every variant. That is the safe reading:
+    the alternatives on the right are then alternative spellings of one thing
+    rather than replacements for distinct phrases.
+    """
+    candidates = [c.strip() for c in VARIANT_SPLIT.split(probably) if c.strip()]
+    if not candidates:
+        return []
+    if len(candidates) == len(heard_variants):
+        return list(zip(heard_variants, candidates))
+    return [(v, candidates[0]) for v in heard_variants]
 
 
 def _pattern(variant: str):

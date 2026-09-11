@@ -62,6 +62,15 @@ Finish by returning ONLY a JSON object, with no prose and no code fence around i
   "hard_dates": [{"date", "what"}]
   "open_questions": [string]
 
+"likely_errors" is applied to the transcript by direct substitution, so both sides must be
+written to be substituted rather than to describe the problem:
+  - "heard" is the exact wording as it appears in the transcript, and no wider than the part
+    that is actually wrong. Do not include surrounding words for context.
+  - "probably" is exactly what should replace it, so that swapping one for the other leaves a
+    correct sentence and loses nothing. Write "100 to 200", not "the figure should be 100 to 200".
+  - If one error appears in several wordings, separate them with " / " on both sides, in the
+    same order, so that each heard variant lines up with its own replacement.
+
 "confidence" is one of high, medium, low. Never invent a correction you found no evidence for.
 If you suspect something and cannot support it, put it in open_questions instead. An honest gap
 is useful; a confident wrong name is published and then repeated."""
