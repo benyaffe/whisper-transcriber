@@ -113,6 +113,7 @@ def ask(
     max_tool_calls: int = 20,
     client=None,
     on_tool: Optional[Callable[[str, dict], None]] = None,
+    fatal: tuple = (),
 ) -> Answer:
     """Run a conversation to completion and return the final text.
 
@@ -124,6 +125,14 @@ def ask(
     model is told so and asked to answer with what it has, which produces a
     partial context map instead of an exception. A stage that wanted the
     exception can check `stopped_early`.
+
+    `fatal` names the exceptions a tool can raise that must end the run rather
+    than become an error result. Turning every failure into a result is right
+    for a bad query and wrong for a revoked credential: the first is one
+    search out of twenty, the second means every remaining search fails too
+    and the model spends its whole budget rediscovering that. Without this the
+    caller's own outage rule is silently swallowed by the retry-friendly
+    behaviour above it.
     """
     tools = tools or []
     by_name = {t.name: t for t in tools}
@@ -188,6 +197,8 @@ def ask(
 
             try:
                 results.append(_result(block.id, tool.run(block.input)))
+            except fatal:
+                raise
             except Exception as e:
                 results.append(_result(block.id, f"{type(e).__name__}: {e}", error=True))
 

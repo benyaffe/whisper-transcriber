@@ -172,6 +172,41 @@ def test_one_failing_tool_does_not_lose_the_others():
     assert any(b["content"] == "fine" for b in blocks)
 
 
+def test_a_fatal_tool_failure_ends_the_run():
+    """Right for a bad query, wrong for a revoked credential. Without this the
+    caller's own outage rule is swallowed by the retry-friendly behaviour."""
+    class Revoked(Exception):
+        pass
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {})], stop_reason="tool_use"),
+        _Message([_Text("should never be reached")]),
+    ])
+
+    def revoked(payload):
+        raise Revoked("token gone")
+
+    with pytest.raises(Revoked):
+        agent.ask("go", tools=[_tool(run=revoked)], client=client, fatal=(Revoked,))
+
+
+def test_an_unlisted_failure_is_still_only_an_error_result():
+    class Revoked(Exception):
+        pass
+
+    client = _FakeClient([
+        _Message([_ToolUse("search", {})], stop_reason="tool_use"),
+        _Message([_Text("carried on")]),
+    ])
+
+    def boom(payload):
+        raise ValueError("just a bad query")
+
+    answer = agent.ask("go", tools=[_tool(run=boom)], client=client, fatal=(Revoked,))
+
+    assert answer.text == "carried on"
+
+
 def test_an_invented_tool_is_reported_rather_than_crashing():
     client = _FakeClient([
         _Message([_ToolUse("no_such_tool", {})], stop_reason="tool_use"),
