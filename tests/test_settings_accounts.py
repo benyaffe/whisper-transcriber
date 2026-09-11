@@ -222,3 +222,109 @@ def test_a_cold_machine_is_told_the_token_is_missing(scoped_settings, monkeypatc
     assert not result.ok
     assert "not set up" in result.detail.lower()
     assert result.skip_action, "there has to be a way past it; it is optional"
+
+
+# --- the HuggingFace wizard ------------------------------------------------------
+
+
+@pytest.fixture
+def wizard(qt_app, scoped_settings, monkeypatch):
+    """A wizard that never reaches the network."""
+    from src.ui.podcastnotes import huggingface_wizard as module
+
+    monkeypatch.setattr(module, "get_hf_token", lambda: "")
+    w = module.HuggingFaceWizard()
+    yield w
+    w.deleteLater()
+
+
+def test_the_token_page_link_fills_in_the_required_name(wizard):
+    """HuggingFace requires a name and the wizard never mentioned it, so people
+    reached a form with a required field the instructions had not prepared them
+    for."""
+    from src.ui.podcastnotes.huggingface_wizard import TOKEN_NAME, TOKEN_URL
+
+    assert "tokenName=" in TOKEN_URL
+    assert TOKEN_NAME in TOKEN_URL
+    assert "tokenType=read" in TOKEN_URL
+
+
+def test_the_step_says_a_name_is_needed(wizard):
+    assert "name" in wizard.step_token.label.text().lower()
+
+
+def test_the_token_is_not_masked(wizard):
+    """A paste that came through truncated is unverifiable behind dots, and
+    this field has nothing to hide: the token is on a page still open in the
+    browser next door."""
+    from PyQt6.QtWidgets import QLineEdit
+
+    assert wizard.token_input.echoMode() == QLineEdit.EchoMode.Normal
+
+
+def test_the_licences_are_reachable_before_a_token_is_checked(wizard):
+    """Step 3 had no button of its own, and the three links appeared only once
+    a valid token produced a "licences" problem. Before then it named three
+    pages with no way to reach any of them."""
+    from src.core.diarization import GATED_MODELS
+
+    assert wizard.licence_layout.count() == len(GATED_MODELS)
+    assert len(GATED_MODELS) == 3
+
+
+def test_each_step_ticks_on_its_own_condition(wizard):
+    """Both used to tick from `signed_in`, so somebody who already had an
+    account saw step 1 stay unticked until they had also pasted a token."""
+    from src.core.diarization import TokenStatus
+
+    wizard.token_input.setText("")
+    wizard._on_checked(TokenStatus(valid=False, username="ben", problem="licences",
+                                   missing_licences=[]))
+
+    assert "10003" in wizard.step_account.marker.text(), "account should be ticked"
+    assert wizard.step_token.marker.text() == "2", "no token pasted, so step 2 is not done"
+
+
+def test_escape_records_the_choice(wizard, scoped_settings):
+    """It used to go straight to QDialog.reject, bypassing the skip, so the
+    choice was never written down and the person was asked again every launch.
+    Which is the nagging the skip exists to prevent."""
+    from src.core.config import is_speaker_id_enabled, set_speaker_id_enabled
+
+    set_speaker_id_enabled(True)
+
+    wizard.reject()
+
+    assert is_speaker_id_enabled() is False
+
+
+def test_finishing_with_a_good_token_does_not_turn_speakers_off(wizard, scoped_settings):
+    from src.core.config import is_speaker_id_enabled
+    from src.core.diarization import TokenStatus
+
+    wizard.status = TokenStatus(valid=True, username="ben")
+    wizard.token_input.setText("hf_good")
+
+    wizard._finish()
+
+    assert is_speaker_id_enabled() is True
+
+
+def test_the_licence_bullets_are_characters_not_html(wizard):
+    """Qt only treats a label as rich text once it spots a tag, so an entity on
+    its own is drawn as the literal characters "&bull;". Found by rendering."""
+    from PyQt6.QtWidgets import QLabel
+
+    labels = [
+        c.text() for c in wizard.licence_box.findChildren(QLabel)
+    ]
+
+    assert labels, "no licence rows"
+    assert not any("&bull;" in text for text in labels)
+    assert any("•" in text for text in labels)
+
+
+def test_the_blurb_does_not_repeat_the_heading(wizard):
+    from src.ui.podcastnotes.huggingface_wizard import WHAT_IT_BUYS
+
+    assert not WHAT_IT_BUYS.startswith("Speaker names")

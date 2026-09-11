@@ -20,14 +20,23 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.config import get_hf_token, save_hf_token, set_speaker_id_enabled
+from src.core.diarization import GATED_MODELS
 from src.ui.theme import role
 
 SIGNUP_URL = "https://huggingface.co/join"
-TOKEN_URL = "https://huggingface.co/settings/tokens/new?tokenType=read"
+
+# The name is prefilled as well as the type. HuggingFace requires a name and
+# the wizard never mentioned it, so people reached a form with a required
+# field the instructions had not prepared them for.
+TOKEN_NAME = "PodcastNotesWT"
+TOKEN_URL = (
+    "https://huggingface.co/settings/tokens/new"
+    f"?tokenType=read&tokenName={TOKEN_NAME}"
+)
 
 WHAT_IT_BUYS = (
-    "Speaker names. With this, the transcript says who spoke. Without it, "
-    "every line reads \"Speaker 1\" and you match them up yourself."
+    "With this, the transcript says who spoke. Without it, every line reads "
+    "\"Speaker 1\" and you match them up yourself."
 )
 
 
@@ -132,17 +141,31 @@ class HuggingFaceWizard(QDialog):
         self.step_account.link("Open", SIGNUP_URL)
         layout.addWidget(self.step_account)
 
-        self.step_token = _Step(2, "Make a token with Read access, then paste "
-                                   "it here.")
+        self.step_token = _Step(2, f"Make a token with Read access. The page asks "
+                                   f"for a name; anything does, and the link below "
+                                   f"fills in \u201c{TOKEN_NAME}\u201d. Paste it here.")
         self.step_token.set_number(2)
         self.step_token.link("Open", TOKEN_URL)
         layout.addWidget(self.step_token)
 
+        # Unmasked, unlike the same field in Accounts, which has a Show button.
+        # This one has nothing to hide: it is being pasted in for the first
+        # time, off a page the person still has open, and a paste that came
+        # through truncated is unverifiable behind dots.
+        token_row = QHBoxLayout()
         self.token_input = QLineEdit()
         self.token_input.setPlaceholderText("hf_...")
-        self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.token_input.returnPressed.connect(self._check)
-        layout.addWidget(self.token_input)
+        token_row.addWidget(self.token_input, 1)
+
+        # Beside the field it validates. It used to be in the bottom button
+        # bar, below step 3, so the only way forward from step 2 was a control
+        # five widgets further down that looked like it belonged to the dialog
+        # rather than to the token.
+        self.check_button = QPushButton("Check")
+        self.check_button.clicked.connect(self._check)
+        token_row.addWidget(self.check_button)
+        layout.addLayout(token_row)
 
         self.step_licences = _Step(3, "Accept three model licences. Each is "
                                       "one button on its page.")
@@ -155,6 +178,13 @@ class HuggingFaceWizard(QDialog):
         self.licence_layout.setSpacing(3)
         layout.addWidget(self.licence_box)
 
+        # Shown from the start, not only after a token has checked out. Step 3
+        # had no button of its own and the three links appeared only once a
+        # valid token produced a "licences" problem, so before then the step
+        # named three pages with no way to reach any of them, and the licences
+        # looked like something the wizard would do for you.
+        self._show_licences(GATED_MODELS)
+
         self.message = QLabel("")
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
@@ -166,10 +196,6 @@ class HuggingFaceWizard(QDialog):
         self.skip_button.clicked.connect(self._skip)
         buttons.addWidget(self.skip_button)
         buttons.addStretch()
-
-        self.check_button = QPushButton("Check")
-        self.check_button.clicked.connect(self._check)
-        buttons.addWidget(self.check_button)
 
         self.done_button = QPushButton("Done")
         role(self.done_button, "primary")
@@ -205,8 +231,12 @@ class HuggingFaceWizard(QDialog):
         self.check_button.setEnabled(True)
         self._clear_licences()
 
+        # Separately, because they are separate things. Both used to tick from
+        # `signed_in`, so step 1 could never complete on its own and somebody
+        # who already had an account saw it stay unticked until they had also
+        # pasted a working token.
         self.step_account.set_done(status.signed_in)
-        self.step_token.set_done(status.signed_in)
+        self.step_token.set_done(bool(self.token_input.text().strip()) and status.signed_in)
 
         if status.valid:
             self.step_licences.set_done(True)
@@ -234,7 +264,7 @@ class HuggingFaceWizard(QDialog):
     def _show_licences(self, models):
         for model in models:
             row = QHBoxLayout()
-            label = QLabel(f"&bull; {model.name}")
+            label = QLabel(f"\u2022  {model.name}")
             row.addWidget(label, 1)
             button = QPushButton("Accept")
             button.clicked.connect(
@@ -254,6 +284,7 @@ class HuggingFaceWizard(QDialog):
     # --- finishing ------------------------------------------------------------
 
     def _finish(self):
+        self._settle_worker()
         save_hf_token(self.token_input.text().strip())
         set_speaker_id_enabled(True)
         self.accept()
@@ -264,6 +295,27 @@ class HuggingFaceWizard(QDialog):
         Closing would leave the row red and the person would be asked again
         every launch, which is how a genuine choice turns into nagging.
         """
-        set_speaker_id_enabled(False)
         self.skipped.emit()
-        self.reject()
+        self.reject()   # which is what records the choice
+
+    def _settle_worker(self):
+        """Let a check in flight finish before the dialog goes away.
+
+        Closing on top of a running QThread produces "QThread: Destroyed while
+        thread is still running" and can take the process with it. The check is
+        three network calls, so a short wait is the whole cost.
+        """
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.wait(3000)
+
+    def reject(self):
+        """Escape and the close box mean the same thing as Skip.
+
+        They used to go straight to QDialog.reject, bypassing `_skip`, so the
+        choice was never written down and the person was asked again on every
+        launch. Which is the exact nagging `_skip` exists to prevent.
+        """
+        self._settle_worker()
+        if not self.status or not self.status.valid:
+            set_speaker_id_enabled(False)
+        super().reject()
