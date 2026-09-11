@@ -35,6 +35,10 @@ from src.ui.theme import role
 # them is not a chore. Matches what snippet.py already cuts.
 CLIP_SECONDS = 6.0
 
+# Roughly 75 characters at the body size, which is the width prose is
+# comfortable at. Wider and the eye loses the start of the next line.
+READABLE_WIDTH = 620
+
 # Named, because they are positions in a stack and inserting a pane shifts
 # every one after it. Adding the questions pane silently moved the finished
 # documents from 2 to 3, which a bare number gives no way to notice.
@@ -137,6 +141,8 @@ class WriteUpView(QWidget):
     speakers_confirmed = pyqtSignal(dict)
     answers_given = pyqtSignal(dict)
     publish_requested = pyqtSignal()
+    save_requested = pyqtSignal()
+    reveal_requested = pyqtSignal()
     new_trip_requested = pyqtSignal()
     retry_requested = pyqtSignal()
 
@@ -346,6 +352,12 @@ class WriteUpView(QWidget):
 
         self.document = QTextBrowser()
         self.document.setOpenExternalLinks(True)
+        # A line of thirteen-pixel prose running the full width of a
+        # thousand-pixel window is about 160 characters, which the eye loses
+        # its place in. The document is given a measure and centred in
+        # whatever space is left.
+        self.document.document().setTextWidth(READABLE_WIDTH)
+        self.document.setViewportMargins(20, 16, 20, 16)
         layout.addWidget(self.document, 1)
 
         self.published = QLabel("")
@@ -358,7 +370,20 @@ class WriteUpView(QWidget):
         layout.addWidget(self.published)
 
         row = QHBoxLayout()
+        self.reveal = QPushButton("Show the file")
+        role(self.reveal, "quiet")
+        self.reveal.clicked.connect(self.reveal_requested)
+        row.addWidget(self.reveal)
         row.addStretch(1)
+
+        # The write-up is saved on every publish and the path is never
+        # mentioned, so the safety net publish.py built ("the file is still
+        # there") could not be reached from the screen that needed it. The
+        # transcription screen has had a reveal button all along.
+        self.save_as = QPushButton("Save as...")
+        self.save_as.clicked.connect(self.save_requested)
+        row.addWidget(self.save_as)
+
         self.another = QPushButton("Start another trip")
         role(self.another, "quiet")
         self.another.clicked.connect(self.new_trip_requested)
@@ -544,6 +569,15 @@ class WriteUpView(QWidget):
 
         self.published.setText("\n\n".join(line.strip() for line in lines if line))
         role(self.published, "success" if result.copied else "danger")
+        from src.ui.theme import restyle
+
+        restyle(self.published)
+        self.published.show()
+
+    def note_saved(self, message: str):
+        """Say where it went, in the same place publishing reports."""
+        self.published.setText(message)
+        role(self.published, "success" if message.startswith("Saved") else "danger")
         from src.ui.theme import restyle
 
         restyle(self.published)

@@ -404,3 +404,115 @@ def test_the_two_documents_are_joined_the_way_output_defines_it(window):
     assert window._combined_document() == Documents(
         summary="SUMMARY", transcript="TRANSCRIPT"
     ).combined
+
+
+# --- leaving a finished write-up -------------------------------------------------
+
+
+def test_leaving_unsaved_documents_asks_first(window, monkeypatch):
+    """They took about half an hour to make and this drops them."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: (asked.append(1), QMessageBox.StandardButton.Cancel)[1])
+    window.writeup.summary = "SUMMARY"
+    window._kept = False
+    window.stack.setCurrentWidget(window.writeup_view)
+
+    window._start_another_trip()
+
+    assert asked == [1]
+    assert window.stack.currentWidget() is window.writeup_view, "left anyway"
+
+
+def test_discarding_when_asked_goes_ahead(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Discard)
+    window.writeup.summary = "SUMMARY"
+    window._kept = False
+
+    window._start_another_trip()
+
+    assert window.stack.currentWidget() is window.intake
+
+
+def test_documents_already_copied_do_not_stop_anybody(window, monkeypatch):
+    """Somebody who has put them in a Doc has no reason to be interrupted."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(1))
+    window.writeup.summary = "SUMMARY"
+    window._kept = True
+
+    window._start_another_trip()
+
+    assert asked == []
+    assert window.stack.currentWidget() is window.intake
+
+
+def test_publishing_counts_as_keeping_them(window, monkeypatch, tmp_path):
+    from src.podcastnotes import publish
+
+    class _Result:
+        copied = True
+        browser_opened = True
+        problems = ()
+        markdown_path = str(tmp_path / "write-up.md")
+
+        def summary(self):
+            return "Saved and copied."
+
+    window.writeup.work_dir = str(tmp_path)
+    monkeypatch.setattr(publish, "publish", lambda text, target: _Result())
+
+    window._publish()
+
+    assert window._kept is True
+
+
+def test_a_failed_copy_does_not_count_as_keeping_them(window, monkeypatch, tmp_path):
+    from src.podcastnotes import publish
+
+    class _Result:
+        copied = False
+        browser_opened = True
+        problems = ("clipboard failed",)
+        markdown_path = str(tmp_path / "write-up.md")
+
+        def summary(self):
+            return "Saved."
+
+    window.writeup.work_dir = str(tmp_path)
+    monkeypatch.setattr(publish, "publish", lambda text, target: _Result())
+
+    window._publish()
+
+    assert window._kept is False
+
+
+def test_saving_somewhere_chosen_counts(window, monkeypatch, tmp_path):
+    from PyQt6.QtWidgets import QFileDialog
+
+    target = tmp_path / "chosen.md"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+    window.writeup.summary = "S"
+    window.writeup.transcript = "T"
+
+    window._save_write_up()
+
+    assert window._kept is True
+    assert "S" in target.read_text()
+
+
+def test_cancelling_the_save_dialog_writes_nothing(window, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+
+    window._save_write_up()
+
+    assert window._kept is False

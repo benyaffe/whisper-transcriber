@@ -378,6 +378,25 @@ class IntakeView(QWidget):
         """Drop the cached token, for when somebody has just changed it."""
         self._token_cache = None
 
+    def clear(self):
+        """Empty the form for a new trip.
+
+        Nothing did this, so "Start another trip" landed on a form still
+        holding the last trip's name, description and recordings. Pressing
+        Start from there makes a second trip of the same files, which is
+        neither what anybody meant nor obviously wrong until it has run.
+
+        The speaker checkbox is deliberately left as it was: whether somebody
+        wants speaker names is a preference that holds across trips, unlike the
+        recordings, which never do.
+        """
+        self.name_input.clear()
+        self.description_input.clear()
+        self.url_input.clear()
+        self.recordings.clear()
+        self.recordings.changed.emit()
+        self._refresh()
+
     def _refresh(self):
         # The button stays enabled with no name or no recordings, because a
         # disabled button with no explanation is the least helpful thing a form

@@ -44,6 +44,8 @@ class MainWindow(QMainWindow):
         self.writeup = None
         self.writeup_worker = None
         self._last_step = "context"
+        # Whether this write-up has been put somewhere the person chose.
+        self._kept = False
         self._stall_timer = None
         self._stall_warned = False
 
@@ -64,7 +66,9 @@ class MainWindow(QMainWindow):
         self.writeup_view.speakers_confirmed.connect(self._speakers_confirmed)
         self.writeup_view.answers_given.connect(self._answers_given)
         self.writeup_view.publish_requested.connect(self._publish)
-        self.writeup_view.new_trip_requested.connect(self._show_intake)
+        self.writeup_view.save_requested.connect(self._save_write_up)
+        self.writeup_view.reveal_requested.connect(self._reveal_write_up)
+        self.writeup_view.new_trip_requested.connect(self._start_another_trip)
         self.writeup_view.retry_requested.connect(self._retry_writeup)
 
         self.stack = QStackedWidget()
@@ -168,7 +172,30 @@ class MainWindow(QMainWindow):
         self.intake.add_sources(paths)
 
     def _show_intake(self):
+        self.intake.clear()
         self.stack.setCurrentWidget(self.intake)
+
+    def _start_another_trip(self):
+        """Leave the finished write-up, once it is clear that is intended.
+
+        The documents took about half an hour to make and are dropped by this,
+        so it asks first, and only when they have not been published or saved.
+        Somebody who has already put them in a Doc has no reason to be stopped.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        if self.writeup is not None and self.writeup.summary and not self._kept:
+            answer = QMessageBox.question(
+                self, "Leave this write-up?",
+                "The transcript and summary for this trip have not been copied "
+                "or saved anywhere you chose. Starting another trip leaves them "
+                "behind.\n\nThe files stay in the trip folder either way.",
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Discard,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Discard:
+                return
+        self._show_intake()
 
     # --- running a trip -------------------------------------------------------
 
@@ -239,6 +266,7 @@ class MainWindow(QMainWindow):
 
         from src.podcastnotes.pipeline import WriteUp
 
+        self._kept = False
         self.writeup = WriteUp.resume(
             outputs.work_dir, payload,
             boundaries=_read_json(getattr(outputs, "boundaries_path", "")),
@@ -329,8 +357,37 @@ class MainWindow(QMainWindow):
 
         target = os.path.join(self.writeup.work_dir, "write-up.md")
         result = publish.publish(self._combined_document(), target)
+        self._kept = self._kept or result.copied
         self.writeup_view.show_published(result)
         self._logger.info(f"Published: {result.summary()} {result.problems}")
+
+    def _save_write_up(self):
+        """Put the Markdown somewhere the person chose.
+
+        It is always written to the trip folder, but that path is never shown,
+        so "it is saved" was true and useless.
+        """
+        from PyQt6.QtWidgets import QFileDialog
+
+        suggested = f"{getattr(self.trip, 'name', 'write-up') or 'write-up'}.md"
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Save the write-up", suggested, "Markdown (*.md)"
+        )
+        if not target:
+            return
+        try:
+            with open(target, "w") as handle:
+                handle.write(self._combined_document())
+        except OSError as e:
+            self.writeup_view.note_saved(f"Could not save it there: {e}")
+            return
+        self._kept = True
+        self.writeup_view.note_saved(f"Saved to {target}")
+
+    def _reveal_write_up(self):
+        import subprocess
+
+        subprocess.run(["open", self.writeup.work_dir], check=False)
 
     def _combined_document(self) -> str:
         """Both documents as one, the way output.Documents defines it.

@@ -523,3 +523,38 @@ def test_removing_a_recording_shrinks_the_list(qt_app):
     listing.remove_selected()
 
     assert listing.height() < tall
+
+
+# --- starting over ---------------------------------------------------------------
+
+
+def test_a_new_trip_starts_from_an_empty_form(view, audio_files):
+    """"Start another trip" landed on a form still holding the last trip's
+    name, description and recordings. Pressing Start from there makes a second
+    trip of the same files, which is not obviously wrong until it has run."""
+    ready(view, name="Ashford", sources=audio_files)
+    view.description_input.setPlainText("Ridgeline and Lakeside General")
+
+    view.clear()
+
+    assert view.name_input.text() == ""
+    assert view.description_input.toPlainText() == ""
+    assert view.recordings.sources() == []
+
+
+def test_clearing_keeps_the_speaker_preference(view, audio_files):
+    """Whether somebody wants speaker names holds across trips. The recordings
+    never do."""
+    ready(view, sources=audio_files, speakers=False)
+
+    view.clear()
+
+    assert view.speakers_checkbox.isChecked() is False
+
+
+def test_a_cleared_form_shows_the_drop_zone_again(view, audio_files):
+    ready(view, sources=audio_files)
+
+    view.clear()
+
+    assert view.recordings.isVisible() is False or view.recordings.count() == 0
