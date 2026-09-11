@@ -158,6 +158,18 @@ def test_a_failure_offers_a_way_forward(view):
     assert view.retry.isHidden() is False
     assert "expired" in view.problem.text()
     assert view.bar.isHidden() is True, "a spinner kept running under a failure"
+    assert view.title.text() == "The write-up stopped"
+
+
+def test_a_failure_clears_what_it_was_last_doing(view):
+    """Left in place, "Looking up: Miles Nadeau" sits under the failure message
+    and reads as though that lookup were still running."""
+    view.working("Reading the background for this trip", "Looking up: Miles Nadeau")
+
+    view.on_failed("Could not reach your company's knowledge search.")
+
+    assert view.detail.text() == ""
+    assert view.stage.text() == ""
 
 
 def test_the_retry_button_asks_the_window_to_try_again(view):

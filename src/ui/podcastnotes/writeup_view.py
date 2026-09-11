@@ -367,7 +367,12 @@ class WriteUpView(QWidget):
         self.problem.show()
         self.retry.show()
         self.bar.hide()
-        self.stage.setText("The write-up stopped")
+        self.title.setText("The write-up stopped")
+        self.stage.setText("")
+        # The last thing it was doing has to go with it. Left in place, "Looking
+        # up: Miles Nadeau" sits under a failure message and reads as though
+        # that lookup were still running.
+        self.detail.setText("")
         self.panes.setCurrentIndex(PANE_WAITING)
 
     def review_context(self, context_map):
