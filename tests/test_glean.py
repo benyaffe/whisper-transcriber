@@ -183,6 +183,81 @@ def test_no_results_is_an_empty_list_not_a_crash(monkeypatch):
     assert glean.search("nothing at all") == []
 
 
+# --- research: what Claude reads ----------------------------------------------
+
+
+def test_research_brings_back_the_body_not_just_a_snippet(monkeypatch):
+    """The whole reason this exists. A snippet cannot establish that a garbled
+    name belongs to a real person; the body of somebody's working doc can."""
+    _fake_research(monkeypatch, [
+        _rich("Working Doc", "https://d/1", "gdrive", full_text="Dr. Miles Nadeau, our consultant."),
+    ])
+
+    assert glean.research("nadeau")[0]["body"] == "Dr. Miles Nadeau, our consultant."
+
+
+def test_research_reports_dates_because_the_caller_cannot_ask_later(monkeypatch):
+    _fake_research(monkeypatch, [
+        _rich("Plan", "https://d/1", "gdrive", full_text="x",
+              created="2026-05-11 18:38:27+00:00", updated="2026-08-14 00:43:57+00:00"),
+    ])
+
+    hit = glean.research("plan")[0]
+
+    assert hit["created"] == "2026-05-11"
+    assert hit["updated"] == "2026-08-14"
+
+
+def test_a_slack_thread_is_joined_rather_than_dropped(monkeypatch):
+    """Slack arrives as one entry per message. Reading only the first would
+    lose the reply that usually carries the answer."""
+    _fake_research(monkeypatch, [
+        _rich("thread", "https://s/1", "slack", full_text_list=["I'm in Merrow", "with Miles Nadeau"]),
+    ])
+
+    assert glean.research("merrow")[0]["body"] == "I'm in Merrow\nwith Miles Nadeau"
+
+
+def test_a_datasource_with_no_body_falls_back_to_snippets(monkeypatch):
+    _fake_research(monkeypatch, [_rich("Title only", "https://d/2", "jira", snippet="a snippet")])
+
+    assert glean.research("x")[0]["body"] == "a snippet"
+
+
+def test_a_body_longer_than_the_budget_is_truncated(monkeypatch):
+    _fake_research(monkeypatch, [_rich("Long", "https://d/3", "gdrive", full_text="z" * 20000)])
+
+    assert len(glean.research("x")[0]["body"]) == glean.BODY_CHARS
+
+
+def test_llm_content_is_requested_with_a_size_or_glean_rejects_it(monkeypatch):
+    """Both of these were 400s before they were arguments. `max_snippet_size`
+    is required whenever LLM content is asked for, and `facet_bucket_size` is
+    required by the options model even with no facets wanted."""
+    seen = {}
+    _fake_research(monkeypatch, [], seen=seen)
+
+    glean.research("anything")
+
+    assert seen["max_snippet_size"] == glean.BODY_CHARS
+    assert seen["options"].return_llm_content_over_snippets is True
+    assert seen["options"].facet_bucket_size is not None
+
+
+def test_a_result_carrying_no_document_is_skipped_not_crashed_on(monkeypatch):
+    _fake_research(monkeypatch, [_rich("ok", "https://d/1", "gdrive", full_text="fine"), _headless()])
+
+    assert [h["title"] for h in glean.research("x")] == ["ok"]
+
+
+def test_research_needs_a_credential_like_everything_else(monkeypatch):
+    monkeypatch.setattr(glean, "instance", lambda: "acme")
+    monkeypatch.setattr(glean, "get_token", lambda: "")
+
+    with pytest.raises(glean.NotConfigured):
+        glean.research("x")
+
+
 # --- the check ----------------------------------------------------------------
 
 
@@ -271,6 +346,73 @@ class _SearchResult:
 
 def _result(title, url, source, snippet):
     return _SearchResult(title, url, source, snippet)
+
+
+class _Meta:
+    def __init__(self, created, updated, owner):
+        self.create_time = created
+        self.update_time = updated
+        self.owner = _Named(owner) if owner else None
+
+
+class _Named:
+    def __init__(self, name):
+        self.name = name
+
+
+class _RichDoc(_Doc):
+    def __init__(self, title, url, source, created, updated, owner):
+        super().__init__(title, url, source)
+        self.metadata = _Meta(created, updated, owner)
+
+
+class _RichResult:
+    def __init__(self, document, full_text, full_text_list, snippet):
+        self.document = document
+        self.full_text = full_text
+        self.full_text_list = full_text_list
+        self.snippets = [_Snippet(snippet)] if snippet else []
+
+
+def _rich(title, url, source, full_text=None, full_text_list=None, snippet=None,
+          created=None, updated=None, owner=None):
+    return _RichResult(
+        _RichDoc(title, url, source, created, updated, owner),
+        full_text, full_text_list, snippet,
+    )
+
+
+def _headless():
+    """A result the SDK returned with no document attached, which happens."""
+    return _RichResult(None, None, None, None)
+
+
+def _fake_research(monkeypatch, results, seen=None):
+    class FakeResponse:
+        def __init__(self):
+            self.results = results
+
+    class FakeSearch:
+        def query(self, query=None, page_size=None, request_options=None, max_snippet_size=None):
+            if seen is not None:
+                seen["query"] = query
+                seen["options"] = request_options
+                seen["max_snippet_size"] = max_snippet_size
+            return FakeResponse()
+
+    class FakeInner:
+        search = FakeSearch()
+
+    class FakeClient:
+        client = FakeInner()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(glean, "build_client", lambda: FakeClient())
 
 
 def _fake_search(monkeypatch, results):

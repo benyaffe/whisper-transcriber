@@ -173,3 +173,88 @@ def _first_snippet(result) -> str:
         if text:
             return text
     return ""
+
+
+# How much of a document to bring back when Claude is the reader. Six thousand
+# characters is roughly two thousand tokens, which is enough to carry the part
+# of a project plan that names people without dragging in the whole thing.
+BODY_CHARS = 6000
+
+
+def research(query: str, page_size: int = 8) -> list[dict]:
+    """One search, with document bodies and dates, for Claude rather than a person.
+
+    `search` above answers "did the credential work"; a snippet is plenty for
+    that. Building a context map is a different job: a title and one snippet
+    cannot tell you that "Miles Nadoe" is Dr. Miles Nadeau, because the
+    evidence for that is in the body of somebody's working doc.
+
+    Two details are not obvious from the SDK signature and were both found by
+    being rejected. `return_llm_content_over_snippets` is refused unless
+    `max_snippet_size` is also set to something between 1 and 10000, and
+    `SearchRequestOptions` requires `facet_bucket_size` even when no facets are
+    wanted. Neither has a usable default.
+
+    Dates come back too, because the caller cannot ask for them afterwards and
+    a context map that cannot say when something happened is much less useful.
+    """
+    from glean.api_client.models.searchrequestoptions import SearchRequestOptions
+
+    options = SearchRequestOptions(
+        facet_bucket_size=0,
+        return_llm_content_over_snippets=True,
+    )
+    with build_client() as client:
+        response = client.client.search.query(
+            query=query,
+            page_size=page_size,
+            request_options=options,
+            max_snippet_size=BODY_CHARS,
+        )
+
+    results = []
+    for result in getattr(response, "results", None) or []:
+        document = getattr(result, "document", None)
+        if document is None:
+            continue
+        metadata = getattr(document, "metadata", None)
+        results.append(
+            {
+                "title": getattr(document, "title", "") or "",
+                "url": getattr(document, "url", "") or "",
+                "source": getattr(document, "datasource", "") or "",
+                "created": _date(getattr(metadata, "create_time", None)),
+                "updated": _date(getattr(metadata, "update_time", None)),
+                "owner": _person(getattr(metadata, "owner", None)),
+                "body": _body(result)[:BODY_CHARS],
+            }
+        )
+    return results
+
+
+def _body(result) -> str:
+    """Whatever the richest available text is, in preference order.
+
+    Slack conversations arrive as `full_text_list`, one entry per message,
+    while documents arrive as `full_text`. Falling back to snippets matters for
+    datasources that return neither, which would otherwise contribute a title
+    and nothing to reason from.
+    """
+    parts = getattr(result, "full_text_list", None)
+    if parts:
+        return "\n".join(p for p in parts if p)
+    whole = getattr(result, "full_text", None)
+    if whole:
+        return whole
+    return "\n".join(
+        (getattr(s, "text", "") or "") for s in (getattr(result, "snippets", None) or [])
+    ).strip()
+
+
+def _date(value) -> str:
+    """Just the day. The time of day has never mattered and adds noise."""
+    return str(value)[:10] if value else ""
+
+
+def _person(value) -> str:
+    return getattr(value, "name", "") or "" if value is not None else ""
