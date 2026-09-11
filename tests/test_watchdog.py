@@ -46,7 +46,7 @@ def build_worker(monkeypatch, segments, *, model_load_seconds=0.0):
     monkeypatch.setattr(tmod, "detect_optimal_settings", lambda: ("cpu", "int8", "Test"))
     monkeypatch.setattr(tmod, "detect_diarization_device", lambda: "cpu")
     monkeypatch.setattr(tmod, "get_file_info", lambda p: {"duration": 600.0, "has_video": False, "has_audio": True})
-    monkeypatch.setattr(tmod, "check_memory_available", lambda m, d: (True, ""))
+    monkeypatch.setattr(tmod, "check_memory_available", lambda m, d, speaker_id=False: (True, ""))
     monkeypatch.setattr(worker, "_prepare_audio", lambda: "/tmp/x.m4a")
     monkeypatch.setattr(worker, "_run_diarization", lambda: None)
     monkeypatch.setattr(worker, "_save_outputs", lambda: ("v", "t", "j"))
