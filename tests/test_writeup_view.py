@@ -673,3 +673,71 @@ def test_missing_audio_is_ignored_rather_than_crashing(view, tmp_path):
     view._play_from(10.0)
 
     assert view._player is None
+
+
+# --- saying what publishing did --------------------------------------------------
+
+
+class _Published:
+    def __init__(self, copied=True, browser=True, problems=(), path="/tmp/write-up.md"):
+        self.copied = copied
+        self.browser_opened = browser
+        self.problems = problems
+        self.markdown_path = path
+
+    def summary(self):
+        return "Saved as write-up.md, copied, and a blank document is open."
+
+
+def test_publishing_says_what_it_did(view):
+    """It did three things and mentioned none of them. The browser tab opening
+    was the only sign, which is indistinguishable from the app having done
+    nothing but open a tab."""
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    view.show_published(_Published())
+
+    assert view.published.isHidden() is False
+    assert "Saved as write-up.md" in view.published.text()
+
+
+def test_it_says_to_paste_from_markdown(view):
+    """A plain paste puts the raw Markdown source on the page as literal text.
+    The instruction has existed in publish.py since it was written and was
+    never once shown."""
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    view.show_published(_Published())
+
+    assert "Paste from Markdown" in view.published.text()
+
+
+def test_a_clipboard_failure_is_shown_not_logged(view):
+    """Otherwise somebody pastes whatever they copied earlier into a blank
+    Google Doc and has no idea why."""
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    view.show_published(_Published(
+        copied=False, problems=("Could not reach the clipboard, so copy from the file.",)
+    ))
+
+    assert "Could not reach the clipboard" in view.published.text()
+
+
+def test_there_is_no_paste_advice_when_nothing_was_copied(view):
+    """Telling somebody to paste when the clipboard failed is worse than
+    saying nothing."""
+    view.show_documents(Documents(transcript="t", summary="s"))
+
+    view.show_published(_Published(copied=False, problems=("clipboard failed",)))
+
+    assert "Paste from Markdown" not in view.published.text()
+
+
+def test_a_new_write_up_does_not_inherit_the_last_publish_message(view):
+    view.show_documents(Documents(transcript="t", summary="s"))
+    view.show_published(_Published())
+
+    view.show_documents(Documents(transcript="t2", summary="s2"))
+
+    assert view.published.isHidden() is True

@@ -349,6 +349,15 @@ class WriteUpView(QWidget):
         self.document.setOpenExternalLinks(True)
         layout.addWidget(self.document, 1)
 
+        self.published = QLabel("")
+        self.published.setWordWrap(True)
+        self.published.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        role(self.published, "success")
+        self.published.hide()
+        layout.addWidget(self.published)
+
         row = QHBoxLayout()
         row.addStretch(1)
         self.another = QPushButton("Start another trip")
@@ -488,8 +497,36 @@ class WriteUpView(QWidget):
             )
         self.warnings.setText("\n".join(trouble))
         self.warnings.setVisible(bool(trouble))
+        self.published.hide()
         self._show_document("summary")
         self.panes.setCurrentIndex(PANE_DONE)
+
+    def show_published(self, result):
+        """Say what publishing actually did, and what to do next.
+
+        It used to do three things and mention none of them. The browser tab
+        opening was the only sign anything had happened, which is
+        indistinguishable from the app having done nothing but open a tab, and
+        a plain paste into Google Docs puts the raw Markdown source on the page
+        as literal text.
+
+        The instruction to right-click and choose Paste from Markdown has
+        existed in publish.py since it was written and was never once shown.
+        """
+        from src.podcastnotes.publish import PASTE_INSTRUCTIONS
+
+        lines = [result.summary()]
+        if result.copied:
+            lines.append(PASTE_INSTRUCTIONS)
+        for problem in result.problems:
+            lines.append(problem)
+
+        self.published.setText("\n\n".join(line.strip() for line in lines if line))
+        role(self.published, "success" if result.copied else "danger")
+        from src.ui.theme import restyle
+
+        restyle(self.published)
+        self.published.show()
 
     def _show_document(self, which: str):
         documents = getattr(self, "_documents", None)

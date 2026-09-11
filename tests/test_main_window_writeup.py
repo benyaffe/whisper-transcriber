@@ -366,3 +366,40 @@ def test_each_menu_entry_matches_the_window_it_opens(qt_app):
     finally:
         view.close()
         dialog.close()
+
+
+# --- publishing ------------------------------------------------------------------
+
+
+def test_publishing_reports_back_to_the_screen(window, monkeypatch, tmp_path):
+    """The result used to go to the log and nowhere else."""
+    from src.podcastnotes import publish
+
+    class _Result:
+        copied = True
+        browser_opened = True
+        problems = ()
+        markdown_path = str(tmp_path / "write-up.md")
+
+        def summary(self):
+            return "Saved, copied, and a blank document is open."
+
+    window.writeup.work_dir = str(tmp_path)
+    monkeypatch.setattr(publish, "publish", lambda text, target: _Result())
+
+    window._publish()
+
+    assert window.writeup_view.published.isHidden() is False
+
+
+def test_the_two_documents_are_joined_the_way_output_defines_it(window):
+    """The separator between them is a decision, and a second copy of it in the
+    window is how the two drift apart."""
+    from src.podcastnotes.output import Documents
+
+    window.writeup.summary = "SUMMARY"
+    window.writeup.transcript = "TRANSCRIPT"
+
+    assert window._combined_document() == Documents(
+        summary="SUMMARY", transcript="TRANSCRIPT"
+    ).combined

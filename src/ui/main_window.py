@@ -315,13 +315,32 @@ class MainWindow(QMainWindow):
         self._run_step("answers", answers=answers)
 
     def _publish(self):
+        """Save, copy, open a blank document, and say so.
+
+        The result used to go to the log and nowhere else, so a clipboard
+        failure left somebody pasting whatever they had copied earlier into a
+        blank Google Doc with no idea why.
+        """
+        import os
+
         from src.podcastnotes import publish
 
-        target = f"{self.writeup.work_dir}/write-up.md"
-        result = publish.publish(
-            f"{self.writeup.summary}\n\n---\n\n{self.writeup.transcript}", target
-        )
-        self._logger.info(f"Published via clipboard: {result}")
+        target = os.path.join(self.writeup.work_dir, "write-up.md")
+        result = publish.publish(self._combined_document(), target)
+        self.writeup_view.show_published(result)
+        self._logger.info(f"Published: {result.summary()} {result.problems}")
+
+    def _combined_document(self) -> str:
+        """Both documents as one, the way output.Documents defines it.
+
+        Formatted in one place rather than two, because the separator between
+        them is a decision and having a second copy of it is how the two drift.
+        """
+        from src.podcastnotes.output import Documents
+
+        return Documents(
+            transcript=self.writeup.transcript, summary=self.writeup.summary
+        ).combined
 
     def _on_trip_failed(self, message: str):
         self._stop_stall_watch()
