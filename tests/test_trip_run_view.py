@@ -251,3 +251,21 @@ def test_clicking_a_timestamp_before_audio_exists_is_harmless(view):
     view._play_from(42.0)  # must not raise
 
     assert view.play_button.text() == "Play"
+
+
+def test_every_stage_label_fits_without_clipping(view):
+    """The width is fixed and the comment beside it says a clipped label
+    defeats the point of having one. Moving the estimate to whole minutes made
+    the strings longer, so the measurement has to be redone rather than
+    assumed: "less than a minute left" is now the worst case at 211 of 230."""
+    from src.ui.podcastnotes.trip_worker import remaining
+
+    metrics = view.stage_label.fontMetrics()
+    candidates = [
+        remaining(0), remaining(40), remaining(60), remaining(785), remaining(3540),
+        "Identifying speakers",
+    ]
+
+    for text in candidates:
+        width = metrics.horizontalAdvance(text)
+        assert width <= view.stage_label.width(), f"{text!r} needs {width}px"

@@ -38,6 +38,26 @@ STAGE_SPANS = {
 }
 
 
+def remaining(eta_seconds: int) -> str:
+    """How long is left, in minutes, because the seconds were never real.
+
+    The estimate is derived from throughput measured so far, so it swings by
+    a minute or more between updates. Showing "about 13m 05s left" claims a
+    precision the number does not have, and watching the seconds jump around
+    is worse than not showing them: it reads as the app changing its mind
+    twice a second.
+
+    Rounded up, so it never says one minute and then keeps going, and the last
+    stretch says "less than a minute" rather than counting down from 59.
+    """
+    if eta_seconds <= 0:
+        return "Transcribing"
+    if eta_seconds < 60:
+        return "Transcribing, less than a minute left"
+    minutes = -(-int(eta_seconds) // 60)
+    return f"Transcribing, about {minutes} minute{'s' if minutes != 1 else ''} left"
+
+
 @dataclass
 class TripOutputs:
     """Everything a finished trip produced."""
@@ -226,11 +246,9 @@ class TripWorker(QThread):
                 worker.status.emit(f"[Detected: {language} ({confidence:.0%})]")
 
             def progress(self, percent, eta_seconds):
-                label = "Transcribing"
-                if eta_seconds > 0:
-                    mins, secs = divmod(eta_seconds, 60)
-                    label = f"Transcribing, about {mins}m {secs:02d}s left"
-                worker._emit_stage_progress("transcribe", percent / 100.0, label)
+                worker._emit_stage_progress(
+                    "transcribe", percent / 100.0, remaining(eta_seconds)
+                )
 
             def diarization_progress(self, percent, stage):
                 worker._emit_stage_progress("transcribe", percent / 100.0, stage)
