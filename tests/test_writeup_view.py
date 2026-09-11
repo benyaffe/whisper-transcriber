@@ -546,3 +546,130 @@ def test_the_button_goes_back_once_the_question_is_answered(view):
     view._rows[0].name.setText("Anya Petrov-Hale")
 
     assert view.confirm.text() == "Use these names"
+
+
+# --- playing a voice -------------------------------------------------------------
+
+
+class _FakePlayer:
+    """Stands in for QMediaPlayer, with the load-then-seek behaviour that matters."""
+
+    def __init__(self, seekable=False):
+        self._seekable = seekable
+        self.position = None
+        self.played = 0
+        self.stopped = 0
+
+    def isSeekable(self):
+        return self._seekable
+
+    def setPosition(self, ms):
+        self.position = ms
+
+    def play(self):
+        self.played += 1
+
+    def stop(self):
+        self.stopped += 1
+
+
+def _ready_to_play(view, tmp_path, seekable=False):
+    audio = tmp_path / "combined.m4a"
+    audio.write_bytes(b"not really audio")
+    view.set_audio(str(audio))
+    view._player = _FakePlayer(seekable=seekable)
+    return view._player
+
+
+def test_a_seek_before_the_media_loads_is_held_not_lost(view, tmp_path):
+    """Measured on the real file: setPosition immediately after setSource leaves
+    the position at 0 with status LoadingMedia, and playback then starts at 0:00
+    of a forty-two minute recording. Clicking Play on the third speaker and
+    hearing the first is why this was reported as the buttons doing nothing."""
+    player = _ready_to_play(view, tmp_path, seekable=False)
+
+    view._play_from(412.5)
+
+    assert player.position is None, "seeked before the media was ready"
+    assert player.played == 0
+    assert view._wanted_at == 412500
+
+
+def test_the_held_seek_is_applied_once_the_media_is_ready(view, tmp_path):
+    from PyQt6.QtMultimedia import QMediaPlayer
+
+    player = _ready_to_play(view, tmp_path, seekable=False)
+    view._play_from(412.5)
+
+    view._media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)
+
+    assert player.position == 412500
+    assert player.played == 1
+    assert view._wanted_at is None, "the seek should not be applied twice"
+
+
+def test_a_seek_once_loaded_happens_straight_away(view, tmp_path):
+    """The second click, which always worked."""
+    player = _ready_to_play(view, tmp_path, seekable=True)
+
+    view._play_from(90.0)
+
+    assert player.position == 90000
+    assert player.played == 1
+
+
+def test_a_status_change_with_nothing_pending_does_not_replay(view, tmp_path):
+    from PyQt6.QtMultimedia import QMediaPlayer
+
+    player = _ready_to_play(view, tmp_path, seekable=True)
+    view._play_from(90.0)
+
+    view._media_status_changed(QMediaPlayer.MediaStatus.BufferedMedia)
+
+    assert player.played == 1
+
+
+def test_a_status_that_is_not_ready_does_not_seek(view, tmp_path):
+    from PyQt6.QtMultimedia import QMediaPlayer
+
+    player = _ready_to_play(view, tmp_path, seekable=False)
+    view._play_from(412.5)
+
+    view._media_status_changed(QMediaPlayer.MediaStatus.LoadingMedia)
+
+    assert player.position is None
+    assert view._wanted_at == 412500
+
+
+def test_playing_a_second_voice_stops_the_first(view, tmp_path):
+    """Two people talking at once is nobody's idea of help."""
+    player = _ready_to_play(view, tmp_path, seekable=True)
+
+    view._play_one(10.0)
+    after_first = player.stopped
+    view._play_one(200.0)
+
+    assert player.stopped > after_first, "the first voice kept playing"
+    assert player.position == 200000
+
+
+def test_stopping_forgets_a_pending_seek(view, tmp_path):
+    """Otherwise the media finishes loading and starts playing after the person
+    has already asked for silence."""
+    from PyQt6.QtMultimedia import QMediaPlayer
+
+    player = _ready_to_play(view, tmp_path, seekable=False)
+    view._play_from(412.5)
+
+    view.stop_playing()
+    view._media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)
+
+    assert player.played == 0
+
+
+def test_missing_audio_is_ignored_rather_than_crashing(view, tmp_path):
+    view.set_audio(str(tmp_path / "gone.m4a"))
+
+    view._play_from(10.0)
+
+    assert view._player is None

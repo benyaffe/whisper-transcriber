@@ -147,6 +147,9 @@ class WriteUpView(QWidget):
         self._questions = []
         self._corrections = []
         self._player = None
+        # Where the next seek should land. Held rather than applied, because
+        # the media may not be loaded yet.
+        self._wanted_at = None
         self._build()
 
     # --- construction ---------------------------------------------------------
@@ -436,7 +439,7 @@ class WriteUpView(QWidget):
 
         for voice in voices:
             row = SpeakerRow(voice, by_label.get(voice.speaker))
-            row.play_requested.connect(self._play_from)
+            row.play_requested.connect(self._play_one)
             row.name.textChanged.connect(self._count_unnamed)
             self._speaker_layout.insertWidget(self._speaker_layout.count() - 1, row)
             self._rows.append(row)
@@ -522,16 +525,55 @@ class WriteUpView(QWidget):
             {row.voice.speaker: row.chosen for row in self._rows if row.chosen}
         )
 
+    def _play_one(self, seconds: float):
+        """Only one voice at a time; a second Play replaces the first."""
+        self.stop_playing()
+        self._play_from(seconds)
+
     def _play_from(self, seconds: float):
+        """Play a voice from its own moment, not from the top of the recording.
+
+        The seek has to wait for the media. `setSource` loads asynchronously,
+        and a `setPosition` issued before it finishes is discarded in silence:
+        measured, the position stays at 0 with status LoadingMedia, and
+        playback then starts at 0:00 of a forty-two minute file. Clicking Play
+        on the third speaker and hearing the first one is why this was reported
+        as the buttons doing nothing. The second click always worked, because
+        by then the media was loaded.
+        """
         if not self._audio_path or not os.path.exists(self._audio_path):
             return
+
+        self._wanted_at = int(seconds * 1000)
         if self._player is None:
             self._player = QMediaPlayer(self)
             self._output = QAudioOutput(self)
             self._player.setAudioOutput(self._output)
+            self._player.mediaStatusChanged.connect(self._media_status_changed)
             self._player.setSource(QUrl.fromLocalFile(self._audio_path))
-        self._player.setPosition(int(seconds * 1000))
+
+        if self._player.isSeekable():
+            self._seek_and_play()
+
+    def _media_status_changed(self, status):
+        """Apply a seek that arrived before the file was ready."""
+        ready = (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        )
+        if status in ready and self._wanted_at is not None:
+            self._seek_and_play()
+
+    def _seek_and_play(self):
+        self._player.setPosition(self._wanted_at)
+        self._wanted_at = None
         self._player.play()
+
+    def stop_playing(self):
+        """Silence, for leaving the screen or picking a different voice."""
+        self._wanted_at = None
+        if self._player is not None:
+            self._player.stop()
 
 
 class _CorrectionRow(QFrame):
