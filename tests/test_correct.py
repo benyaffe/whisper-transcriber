@@ -380,6 +380,106 @@ def test_an_ordinary_shortening_is_not_held_back():
     assert result.held_back == []
 
 
+def test_a_phrase_too_long_for_a_segment_is_salvaged_word_by_word():
+    """The real failure: the map proposed a twelve-word span, the transcript is
+    stored in segments of about nine words, so it straddled a boundary and
+    matched nothing. The correction that mattered inside it, Fairmont to Fairmount,
+    is recovered by diffing the pair the model itself supplied."""
+    payload = {"segments": [
+        {"text": "The second hospital was St. Bede's Fairmont", "words": []},
+        {"text": "at 22101 Fairmont Road, that one.", "words": []},
+    ]}
+
+    result = correct.apply(payload, ContextMap(likely_errors=[_err(
+        "St. Bede's Fairmont or St. Bede's Lakesides at 22101 Fairmont Road",
+        "St. Bede Fairmount, or Lakeside St. Bede, at 4400 Fairmount Road",
+    )]))
+
+    text = " ".join(s["text"] for s in result.payload["segments"])
+    assert "Fairmount" in text
+    assert "Fairmont" not in text
+
+
+def test_salvage_never_recovers_a_deletion():
+    """A word present on the left and absent on the right must not be dropped.
+    The phrase here passes the content guard on length, so salvage really does
+    run, which the first version of this test failed to arrange."""
+    payload = {"segments": [
+        {"text": "we walked the alpha beta gamma corridor", "words": []},
+        {"text": "and back again later", "words": []},
+    ]}
+
+    # A pure deletion: beta is on the left and nowhere on the right. The phrase
+    # straddles the two segments, so it cannot match and salvage does run.
+    result = correct.apply(payload, ContextMap(likely_errors=[_err(
+        "the alpha beta gamma corridor and back",
+        "the alpha gamma corridor and back",
+    )]))
+
+    text = " ".join(s["text"] for s in result.payload["segments"])
+    assert "beta" in text, "a word present only on the left was deleted"
+    assert result.applied == 0
+
+
+def test_salvage_only_runs_when_the_whole_phrase_failed():
+    """A phrase that matched must not also be picked apart, or its inner terms
+    get corrected a second time somewhere else in the transcript."""
+    payload = {"segments": [
+        {"text": "the 12th lead is done up front", "words": []},
+        {"text": "and another 12th lead later on", "words": []},
+    ]}
+
+    result = correct.apply(payload, ContextMap(likely_errors=[
+        _err("the 12th lead is done", "the 12-lead is done"),
+    ]))
+
+    assert result.payload["segments"][0]["text"] == "the 12-lead is done up front"
+    assert result.payload["segments"][1]["text"] == "and another 12th lead later on"
+
+
+def test_salvage_still_respects_the_minimum_variant_length():
+    """A one-character difference isolated inside a phrase is not something to
+    go and substitute everywhere else in the transcript.
+
+    The difference has to sit between two matching runs, because difflib groups
+    adjacent differences into a single opcode: paired with a neighbouring
+    change it would arrive as part of a longer, perfectly safe span."""
+    payload = {"segments": [
+        {"text": "we saw Dr X in", "words": []},
+        {"text": "the room, and X again later", "words": []},
+    ]}
+
+    result = correct.apply(payload, ContextMap(likely_errors=[_err(
+        "we saw Dr X in the room",
+        "we saw Dr A in the room",
+    )]))
+
+    text = " ".join(s["text"] for s in result.payload["segments"])
+    assert "X again" in text, "a single character was substituted transcript-wide"
+
+
+def test_an_uncertain_phrase_stays_uncertain_after_salvage():
+    """The marker has to come off before the two sides are diffed and go back
+    on per piece. Left on, its brackets glue themselves to the first and last
+    tokens, which then read as changed words and get substituted into the
+    transcript as "[?[?down]"."""
+    payload = {"segments": [
+        {"text": "we went down the recess room", "words": []},
+        {"text": "corridor now, at the end", "words": []},
+    ]}
+
+    result = correct.apply(payload, ContextMap(likely_errors=[_err(
+        "down the recess room corridor now",
+        "down the resus room corridor now",
+        "medium",
+    )]))
+
+    text = " ".join(s["text"] for s in result.payload["segments"])
+    assert "[?resus]" in text
+    assert "[?[?" not in text, "the uncertainty marker was diffed as if it were content"
+    assert "]]" not in text
+
+
 def test_the_original_payload_is_left_alone():
     """A caller showing a before and after has no other way back."""
     payload = _payload("Ridgelane Health", _words((" Ridgelane", 1.0, 1.5)))

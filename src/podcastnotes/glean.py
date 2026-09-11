@@ -175,13 +175,19 @@ def _first_snippet(result) -> str:
     return ""
 
 
-# How much of a document to bring back when Claude is the reader. Six thousand
-# characters is roughly two thousand tokens, which is enough to carry the part
-# of a project plan that names people without dragging in the whole thing.
-BODY_CHARS = 6000
+# How much of a document to bring back when Claude is the reader, and how many
+# documents. Both are set to favour recall over brevity.
+#
+# Ten thousand characters is Glean's own ceiling for this parameter, so there
+# is nothing above it to reach for. An earlier and much lower value was chosen
+# to keep the token count down, which is the wrong trade here: the evidence
+# that resolves a garbled name is often a single line partway through somebody
+# else's document, and truncating is how you lose exactly that line.
+BODY_CHARS = 10000
+RESULTS_PER_SEARCH = 16
 
 
-def research(query: str, page_size: int = 8) -> list[dict]:
+def research(query: str, page_size: int = RESULTS_PER_SEARCH) -> list[dict]:
     """One search, with document bodies and dates, for Claude rather than a person.
 
     `search` above answers "did the credential work"; a snippet is plenty for

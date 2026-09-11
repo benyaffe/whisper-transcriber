@@ -13,8 +13,11 @@ No Qt, no network at import time.
 
 from src.podcastnotes import auth
 
-# Anything a person reads gets Opus. Bulk mechanical passes get Haiku, where
-# the quality difference does not land on the artefact.
+# Anything a person reads gets Opus, which in this pipeline is everything.
+# MODEL_FAST is kept for a genuinely mechanical pass should one ever appear,
+# but no stage uses it and none should be moved onto it to save money: every
+# stage here feeds a document somebody publishes under their own name, so the
+# quality difference lands on the artefact in all of them.
 #
 # Two naming conventions, and mixing them up produces a 404 that looks exactly
 # like a permissions problem. Models from the 4.6 generation onwards have no

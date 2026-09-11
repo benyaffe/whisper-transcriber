@@ -307,6 +307,41 @@ def test_a_refusal_with_no_details_still_raises():
 # --- what gets sent -----------------------------------------------------------
 
 
+def test_effort_is_set_rather_than_left_at_the_default():
+    """The API default is "high". Leaving it there is a decision not to make
+    one, and this pipeline writes documents somebody publishes under their own
+    name, so it wants the deliberate setting."""
+    client = _FakeClient([_Message([_Text("hi")])])
+
+    agent.ask("go", client=client)
+
+    assert client.sent[0]["output_config"]["effort"] == agent.DEFAULT_EFFORT
+
+
+def test_a_stage_can_ask_for_more_effort_than_the_default():
+    client = _FakeClient([_Message([_Text("hi")])])
+
+    agent.ask("go", client=client, effort="max")
+
+    assert client.sent[0]["output_config"]["effort"] == "max"
+
+
+def test_thinking_is_on():
+    """Opus 5 runs adaptive thinking by default, but the request says so
+    explicitly, so that a later refactor cannot quietly disable it."""
+    client = _FakeClient([_Message([_Text("hi")])])
+
+    agent.ask("go", client=client)
+
+    assert client.sent[0]["thinking"] == {"type": "adaptive"}
+
+
+def test_the_output_ceiling_leaves_room_for_a_long_document():
+    """Hitting max_tokens is a silent quality failure: the document stops and
+    reads as though it finished."""
+    assert agent.MAX_TOKENS >= 64000
+
+
 def test_tools_are_only_declared_when_there_are_some():
     """An empty tools list is a 400, so the key has to be absent rather than
     present and empty."""

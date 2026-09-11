@@ -113,10 +113,86 @@ def apply(payload: dict, context_map) -> Correction:
                 change.segments.append(index)
         if change.occurrences:
             changes.append(change)
-        else:
+            continue
+
+        # The span matched nothing. Usually that is because it is longer than a
+        # segment, so it straddles a boundary and can never match. The pair
+        # still contains real corrections, so fall back to the word-level ones
+        # the model itself implied.
+        salvaged = False
+        for piece in _decompose(proposal):
+            recovered = Change(
+                heard=piece["heard"],
+                applied=piece["replacement"],
+                confidence=piece["confidence"],
+                marked=piece["marked"],
+            )
+            for index, segment in enumerate(segments):
+                hits = _apply_to_segment(segment, piece)
+                if hits:
+                    recovered.occurrences += hits
+                    recovered.segments.append(index)
+            if recovered.occurrences:
+                changes.append(recovered)
+                salvaged = True
+        if not salvaged:
             unmatched.append(change)
 
     return Correction(corrected, changes, unmatched, held_back)
+
+
+def _decompose(proposal: dict) -> list:
+    """The word-level substitutions implied by a phrase-level pair.
+
+    Reached only when the phrase matched nothing, which in practice means it
+    was longer than a transcript segment. "St. Bede's Fairmont ... at 22101
+    Fairmont Road" against "St. Bede Fairmount, ... at 4400 Fairmount Road" yields
+    Fairmont to Fairmount, which does match and is the correction that mattered.
+
+    Only substitutions are taken. An insertion or a deletion in the diff is
+    exactly the "loses a word" failure the guard above exists to prevent, and
+    recovering those here would reintroduce it by the back door. That rule is
+    enforced twice over: a deletion has nothing on its right-hand side and an
+    insertion has nothing on its left, so the emptiness checks below would
+    reject both even if the opcode filter were removed. The filter stays
+    because it states the intent, and a mutation run confirms the two overlap
+    rather than one being load-bearing alone.
+
+    A single-word pair is decomposed like any other. It can only produce the
+    same pair again, which fails to match again and costs nothing, so there is
+    no special case for it.
+    """
+    import difflib
+
+    heard = proposal["heard"].split()
+    # Strip the uncertainty marker before diffing, then put it back per piece.
+    replacement = proposal["replacement"]
+    marked = proposal["marked"]
+    if marked and replacement.startswith("[?") and replacement.endswith("]"):
+        replacement = replacement[2:-1]
+    probably = replacement.split()
+
+    out = []
+    matcher = difflib.SequenceMatcher(
+        a=[w.lower() for w in heard], b=[w.lower() for w in probably]
+    )
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "replace":
+            continue
+        left = " ".join(heard[i1:i2]).strip(",.;:")
+        right = " ".join(probably[j1:j2]).strip(",.;:")
+        if len(left) < MIN_VARIANT or not right:
+            continue
+        out.append(
+            {
+                "heard": left,
+                "replacement": f"[?{right}]" if marked else right,
+                "confidence": proposal["confidence"],
+                "marked": marked,
+                "pattern": _pattern(left),
+            }
+        )
+    return out
 
 
 def _would_delete_content(proposal: dict) -> bool:

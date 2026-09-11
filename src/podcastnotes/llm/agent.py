@@ -31,8 +31,18 @@ from typing import Callable, Optional
 from src.podcastnotes.llm.client import MODEL_BEST, build_client
 
 # Generous, because a truncated document is worse than a slow one and the
-# streaming path means large values do not risk an HTTP timeout.
-MAX_TOKENS = 32000
+# streaming path means large values do not risk an HTTP timeout. A trip twice
+# the length of Ashford still has room here, and hitting this ceiling is a
+# silent quality failure: the document simply stops, and reads as finished.
+MAX_TOKENS = 64000
+
+# How hard Claude works before answering. Not the default, which is "high".
+#
+# The guidance for long-horizon agentic work is high or xhigh rather than max:
+# max earns its keep on a single hard question, while a research loop spends
+# it re-thinking on every turn for very little. Stages that ask one difficult
+# question and want the best possible answer pass "max" explicitly.
+DEFAULT_EFFORT = "xhigh"
 
 # A loop that cannot end is worse than one that ends badly. This is not the
 # tool budget: it is the backstop for a model that keeps taking turns without
@@ -114,6 +124,7 @@ def ask(
     client=None,
     on_tool: Optional[Callable[[str, dict], None]] = None,
     fatal: tuple = (),
+    effort: str = DEFAULT_EFFORT,
 ) -> Answer:
     """Run a conversation to completion and return the final text.
 
@@ -150,6 +161,7 @@ def ask(
             "max_tokens": MAX_TOKENS,
             "messages": messages,
             "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
         }
         if system:
             request["system"] = system

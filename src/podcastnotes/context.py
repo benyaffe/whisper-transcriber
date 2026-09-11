@@ -30,9 +30,14 @@ from src.podcastnotes.llm import agent
 
 FILENAME = "context_map.json"
 
-# Enough to go three levels deep on a trip with three sites and a dozen names.
-# The budget exists to bound a runaway loop, not to save money.
-MAX_SEARCHES = 24
+# The budget exists to bound a runaway loop, not to save money, so it is set
+# well clear of what the work actually needs.
+#
+# The first real Ashford run spent 22 of a 24 search budget, which is not a
+# loop finishing early; it is a loop being cut off. A trip with three sites
+# and a dozen unfamiliar names is not unusual, and every name is worth a
+# search of its own before anything downstream repeats it in a document.
+MAX_SEARCHES = 60
 
 SEARCH_TOOL_DESCRIPTION = (
     "Search the company's internal knowledge (documents, chat, tickets, wikis) "
@@ -62,12 +67,18 @@ Finish by returning ONLY a JSON object, with no prose and no code fence around i
   "hard_dates": [{"date", "what"}]
   "open_questions": [string]
 
-"likely_errors" is applied to the transcript by direct substitution, so both sides must be
-written to be substituted rather than to describe the problem:
-  - "heard" is the exact wording as it appears in the transcript, and no wider than the part
-    that is actually wrong. Do not include surrounding words for context.
-  - "probably" is exactly what should replace it, so that swapping one for the other leaves a
-    correct sentence and loses nothing. Write "100 to 200", not "the figure should be 100 to 200".
+"likely_errors" is applied to the transcript by direct substitution, one row at a time, so every
+row must be atomic and independently substitutable. This matters more than it sounds:
+  - "heard" is the shortest run of words that is actually wrong, which is usually a single term
+    or name. Never a whole sentence. Never two different errors combined into one row: if a
+    sentence contains two mistakes, that is two rows.
+  - "probably" is exactly what replaces it and nothing else. Swapping one for the other must
+    leave a correct sentence and lose no words. Write "100 to 200", not "the figure should be
+    100 to 200" and not "they see 100 to 200 a day".
+  - Substitution happens inside a single transcript segment, and segments are short: the median
+    is about nine words. A span longer than a few words will usually straddle a boundary and
+    then match nothing at all, so the whole correction is lost. Prefer "Fairmont" to "St. Bede's
+    Fairmont at 22101 Fairmont Road".
   - If one error appears in several wordings, separate them with " / " on both sides, in the
     same order, so that each heard variant lines up with its own replacement.
 
