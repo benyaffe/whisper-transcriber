@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self.writeup_view.reveal_requested.connect(self._reveal_write_up)
         self.writeup_view.new_trip_requested.connect(self._start_another_trip)
         self.writeup_view.retry_requested.connect(self._retry_writeup)
+        self.writeup_view.revision_requested.connect(self._revision_requested)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.setup_view)
@@ -276,9 +277,14 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.writeup_view)
         self._run_step("context")
 
-    def _run_step(self, step: str, answers: dict = None):
+    def _run_step(self, step: str, answers: dict = None, notes: str = ""):
         self._last_step = step
-        self.writeup_worker = WriteUpWorker(self.writeup, step, answers=answers)
+        # Held so a retry after a failed rewrite sends the same note again
+        # rather than an empty one, which would spend a pass on nothing.
+        self._last_notes = notes
+        self.writeup_worker = WriteUpWorker(
+            self.writeup, step, answers=answers, notes=notes
+        )
         # Here rather than only at the start, so that retrying after a failure
         # cannot leave the progress and the error on a screen nobody is looking
         # at.
@@ -326,7 +332,10 @@ class MainWindow(QMainWindow):
         that expired, a search that could not be reached. Restarting the whole
         write-up would discard a context map that took minutes to build.
         """
-        self._run_step(getattr(self, "_last_step", "context"))
+        self._run_step(
+            getattr(self, "_last_step", "context"),
+            notes=getattr(self, "_last_notes", ""),
+        )
 
     def _step_finished(self, step: str, result):
         if step == "context":
@@ -351,6 +360,35 @@ class MainWindow(QMainWindow):
                 self.writeup_view.ask_questions(result)
         elif step == "write":
             self.writeup_view.show_documents(result, notes=self.writeup.notes)
+            self.writeup_view.set_revisions(self.writeup.revisions_left)
+            self.writeup_view.show_impossible([])
+        elif step == "revise":
+            found, documents = result
+            self.writeup_view.show_documents(documents, notes=self.writeup.notes)
+            self.writeup_view.set_revisions(self.writeup.revisions_left)
+            # After show_documents, which resets the pane. Shown even when the
+            # rewrite otherwise succeeded, because "I did four of the five
+            # things you asked" is the honest report.
+            self.writeup_view.show_impossible(self.writeup.impossible)
+
+    def _revision_requested(self, notes: str):
+        """A quarter of an hour of Glean and two full rewrites, so it is worth
+        being sure before it starts. Only the count is confirmed, not the
+        content: they are looking at the document and know what is wrong."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        left = self.writeup.revisions_left
+        if left <= 1:
+            answer = QMessageBox.question(
+                self, "Rewrite the write-up?",
+                "This is the last rewrite. After it, whatever is still wrong "
+                "will need editing by hand.\n\nIt takes about ten minutes.",
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
+                QMessageBox.StandardButton.Ok,
+            )
+            if answer != QMessageBox.StandardButton.Ok:
+                return
+        self._run_step("revise", notes=notes)
 
     def _speakers_confirmed(self, names: dict):
         self.writeup.confirm_speakers(names)

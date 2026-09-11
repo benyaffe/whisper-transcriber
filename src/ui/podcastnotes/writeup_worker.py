@@ -28,6 +28,7 @@ LABELS = {
     "questions": "Looking for anything still unresolved",
     "answers": "Applying your answers",
     "write": "Writing the transcript and the summary",
+    "revise": "Looking into what you said, then writing it again",
 }
 
 # One or two words for the heading, so the screen says where in the job it is
@@ -48,6 +49,9 @@ TYPICAL_SECONDS = {
     "questions": 40,
     "answers": 60,
     "write": 420,
+    # The research is seeded by a sentence and a map that already exists, so it
+    # branches far less than the cold pass, and the rewrite is the same 420.
+    "revise": 540,
 }
 
 PHASES = {
@@ -56,6 +60,7 @@ PHASES = {
     "questions": "Questions",
     "answers": "Questions",
     "write": "Writing",
+    "revise": "Rewriting",
 }
 
 
@@ -69,7 +74,7 @@ class WriteUpWorker(QThread):
     failed = pyqtSignal(str)        # already phrased for a person
 
     def __init__(self, writeup, step: str, answers: dict = None, library_path: str = "",
-                 parent=None):
+                 notes: str = "", parent=None):
         super().__init__(parent)
         # Not `self.run`: QThread's own entry point is a method called run, and
         # holding the write-up under that name shadows it, so the thread starts
@@ -78,6 +83,7 @@ class WriteUpWorker(QThread):
         self.step = step
         self.answers = answers or {}
         self.library_path = library_path
+        self.notes = notes
         self._searches = 0
         self._started = 0.0
         self._ticker = None
@@ -128,6 +134,12 @@ class WriteUpWorker(QThread):
             return self.writeup.answer(self.answers)
         if self.step == "write":
             return self.writeup.write_documents()
+        if self.step == "revise":
+            # Both halves on one thread, because the merge between them leaves
+            # the map ahead of the documents. Handing back in between would put
+            # a change log from a newer map beside the older pair on screen.
+            found = self.writeup.revise(self.notes, on_search=self._searched)
+            return found, self.writeup.write_documents()
         raise ValueError(f"There is no write-up step called {self.step!r}.")
 
     def _searched(self, query: str, found=None):
@@ -182,6 +194,14 @@ def explain(error: Exception) -> str:
         return (
             f"The region {error.region} does not carry the model this app uses. "
             f"Change it to global on the setup screen."
+        )
+    from src.podcastnotes.pipeline import RevisionsExhausted
+
+    if isinstance(error, RevisionsExhausted):
+        return (
+            "This write-up has been rewritten five times.\n\n"
+            "Whatever is still wrong needs a person rather than another pass. "
+            "The documents are still here: save them and edit from there."
         )
     if isinstance(error, agent.Refused):
         return (

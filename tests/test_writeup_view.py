@@ -18,6 +18,7 @@ import pytest
 from src.podcastnotes.attribution import Suggestion, Voice
 from src.podcastnotes.output import Documents
 from src.ui.podcastnotes.writeup_view import (
+    _Readable,
     PANE_DONE, PANE_QUESTIONS, PANE_SPEAKERS, PANE_WAITING,
     WriteUpView, _summarise,
 )
@@ -787,3 +788,173 @@ def test_a_new_step_starts_the_bar_over(view):
 
     assert view.bar.value() == 0
     assert view.estimate.text() == ""
+
+
+# --- saying what is wrong, with the document in front of you ---------------------
+
+
+def _docs():
+    return Documents(transcript="t", summary="s")
+
+
+def test_the_note_goes_out_as_typed(view):
+    view.show_documents(_docs())
+    view.notes_box.setPlainText("  The coordinator is Simone Vasari.  ")
+
+    got = []
+    view.revision_requested.connect(got.append)
+    view.send_revision.click()
+
+    assert got == ["The coordinator is Simone Vasari."]
+
+
+def test_an_empty_box_sends_nothing(view):
+    """It is a full agentic Glean pass. Sending it whitespace costs minutes."""
+    view.show_documents(_docs())
+    view.notes_box.setPlainText("   \n  ")
+
+    got = []
+    view.revision_requested.connect(got.append)
+    view.send_revision.click()
+
+    assert got == []
+
+
+def test_a_failed_pass_does_not_throw_away_what_they_typed(view):
+    """Three sentences about who was in the room, lost because Glean was down,
+    and they have to remember them again."""
+    view.show_documents(_docs())
+    view.notes_box.setPlainText("Speaker 3 is Miles Nadeau")
+
+    view.on_failed("Glean is unavailable")
+
+    assert view.notes_box.toPlainText() == "Speaker 3 is Miles Nadeau"
+
+
+def test_the_box_clears_once_the_rewrite_lands(view):
+    view.show_documents(_docs())
+    view.notes_box.setPlainText("Speaker 3 is Miles Nadeau")
+
+    view.show_documents(_docs())
+
+    assert view.notes_box.toPlainText() == ""
+
+
+def test_the_last_rewrite_says_so_before_it_is_spent(view):
+    """Somebody typing their fifth note should know it is their last before
+    they spend a quarter of an hour on it."""
+    view.set_revisions(1)
+
+    assert "One more rewrite" in view.revisions_left.text()
+    assert view.send_revision.isHidden() is False
+
+
+def test_plenty_left_is_not_worth_saying(view):
+    view.set_revisions(5)
+
+    assert view.revisions_left.text() == ""
+
+
+def test_the_end_of_the_road_offers_the_document_instead(view):
+    """Past five, a person on their sixth "still wrong" has hit something this
+    tool cannot fix, and a disabled button with no explanation is worse than
+    the limit."""
+    view.set_revisions(0)
+
+    assert view.send_revision.isHidden() is True, "a dead button invites the click"
+    assert view.notes_box.isHidden() is True
+    assert "edit the document yourself" in view.revise_blurb.text()
+
+
+def test_what_it_could_not_do_is_said_out_loud(view):
+    """Doing nothing is indistinguishable from ignoring them, so they retype it
+    and pay for another pass."""
+    view.show_documents(_docs())
+    view.show_impossible(["Nobody in the recording mentions a Dr Okafor."])
+
+    assert view.impossible.isHidden() is False
+    assert "Dr Okafor" in view.impossible.text()
+    assert "changed nothing for it" in view.impossible.text()
+
+
+def test_a_pass_with_nothing_to_report_says_nothing(view):
+    view.show_documents(_docs())
+    view.show_impossible(["something"])
+
+    view.show_impossible([])
+
+    assert view.impossible.isHidden() is True
+
+
+def test_a_reopened_box_says_what_it_is_for_again(view):
+    """Reaching the limit rewrites the blurb. A new trip in the same window
+    would otherwise open on "this has been rewritten five times"."""
+    view.set_revisions(0)
+
+    view.set_revisions(5)
+
+    assert "Say it in your own words" in view.revise_blurb.text()
+
+
+def test_the_document_keeps_its_measure_however_wide_the_window(view):
+    """`document().setTextWidth()` alone does not survive: QTextBrowser resets
+    it to the viewport width on every resize, so the measure set at
+    construction vanished the moment the window was shown. Green tests, wrong
+    screen, caught by rendering it."""
+    from src.ui.podcastnotes.writeup_view import READABLE_WIDTH
+
+    view.document.resize(1500, 600)
+    view.document.apply_measure()
+
+    shape = view.document.document().rootFrame().frameFormat()
+    column = 1500 - shape.leftMargin() - shape.rightMargin()
+    assert column <= READABLE_WIDTH, f"prose ran {column}px wide"
+
+
+def test_a_narrow_window_still_leaves_a_gutter(view):
+    """Below the measure there is nothing to centre, and text against the frame
+    edge is worse than a short line."""
+    view.document.resize(400, 300)
+    view.document.apply_measure()
+
+    assert view.document.document().rootFrame().frameFormat().leftMargin() == _Readable.GUTTER
+
+
+def test_the_measure_does_not_walk_inwards_on_repeated_resizes(view):
+    """Measuring the viewport and then setting the margins that shrink it is a
+    feedback loop: every resize takes another bite and the column walks towards
+    nothing. It has to be computed from the widget width."""
+    view.document.resize(1500, 600)
+    view.document.apply_measure()
+    first = view.document.document().rootFrame().frameFormat().leftMargin()
+
+    for _ in range(5):
+        view.document.apply_measure()
+
+    assert view.document.document().rootFrame().frameFormat().leftMargin() == first
+
+
+def test_being_resized_is_what_applies_it(view):
+    """The measure has to be re-derived on resize, because that is the moment
+    QTextBrowser throws the old one away."""
+    from PyQt6.QtCore import QSize
+    from PyQt6.QtGui import QResizeEvent
+
+    view.document.resize(1500, 600)
+
+    view.document.resizeEvent(QResizeEvent(QSize(1500, 600), QSize(400, 600)))
+
+    shape = view.document.document().rootFrame().frameFormat()
+    assert shape.leftMargin() > _Readable.GUTTER
+
+
+def test_the_prose_is_not_wider_than_the_viewport(view):
+    """`setViewportMargins` narrows the viewport without re-laying out the
+    text, so the lines kept their old width, spilled past the right edge and
+    raised a horizontal scrollbar under clipped prose."""
+    view.show_documents(_docs())
+    view.document.resize(1500, 600)
+    view.document.apply_measure()
+
+    assert view.document.viewportMargins().left() == 0
+    assert view.document.viewportMargins().right() == 0

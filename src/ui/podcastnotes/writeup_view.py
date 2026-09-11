@@ -25,8 +25,9 @@ import os
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton,
-    QScrollArea, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QStackedWidget, QTextBrowser, QVBoxLayout,
+    QWidget,
 )
 
 from src.ui.theme import role
@@ -133,6 +134,53 @@ class SpeakerRow(QFrame):
         return self.name.text().strip()
 
 
+class _Readable(QTextBrowser):
+    """A document with a measure, held across resizes.
+
+    `document().setTextWidth()` alone does not survive: QTextBrowser resets it
+    to the viewport width on every resize, so setting it once at construction
+    produced a full-width column the moment the window was shown. Rendered and
+    caught, having passed its tests. The margins are recomputed instead, which
+    is what actually holds.
+    """
+
+    # A minimum gutter, so a window narrower than the measure still has the
+    # text off the frame rather than against it.
+    GUTTER = 20
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.apply_measure()
+
+    def apply_measure(self):
+        """Indent the document's own frame, rather than shrinking the viewport.
+
+        `setViewportMargins` narrows the viewport without re-laying out the
+        text, so the lines keep their old width, spill past the right edge and
+        raise a horizontal scrollbar under clipped prose. Rendered and caught,
+        having passed its tests. Margins on the root frame are part of the
+        layout, so the text wraps to them.
+        """
+        frame = self.document().rootFrame()
+        shape = frame.frameFormat()
+        side = self.side_margin()
+        shape.setLeftMargin(side)
+        shape.setRightMargin(side)
+        shape.setTopMargin(16)
+        shape.setBottomMargin(16)
+        frame.setFrameFormat(shape)
+
+    def side_margin(self) -> float:
+        """From the widget width, never the viewport width.
+
+        The viewport is what a margin shrinks, so measuring it and then setting
+        a margin from the result is a feedback loop: every resize takes another
+        bite and the column walks towards nothing.
+        """
+        spare = max(self.width() - READABLE_WIDTH, 0)
+        return float(max(spare // 2, self.GUTTER))
+
+
 class WriteUpView(QWidget):
     """Waiting, naming, answering, and the finished pair of documents."""
 
@@ -143,6 +191,7 @@ class WriteUpView(QWidget):
     reveal_requested = pyqtSignal()
     new_trip_requested = pyqtSignal()
     retry_requested = pyqtSignal()
+    revision_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -327,14 +376,13 @@ class WriteUpView(QWidget):
         role(self.showing, "muted")
         layout.addWidget(self.showing)
 
-        self.document = QTextBrowser()
-        self.document.setOpenExternalLinks(True)
         # A line of thirteen-pixel prose running the full width of a
         # thousand-pixel window is about 160 characters, which the eye loses
         # its place in. The document is given a measure and centred in
         # whatever space is left.
-        self.document.document().setTextWidth(READABLE_WIDTH)
-        self.document.setViewportMargins(20, 16, 20, 16)
+        self.document = _Readable()
+        self.document.setOpenExternalLinks(True)
+        self.document.setViewportMargins(0, 0, 0, 0)
         layout.addWidget(self.document, 1)
 
         self.published = QLabel("")
@@ -345,6 +393,8 @@ class WriteUpView(QWidget):
         role(self.published, "success")
         self.published.hide()
         layout.addWidget(self.published)
+
+        layout.addWidget(self._revise_card())
 
         row = QHBoxLayout()
         self.reveal = QPushButton("Show the file")
@@ -371,6 +421,118 @@ class WriteUpView(QWidget):
         row.addWidget(self.publish)
         layout.addLayout(row)
         return pane
+
+    def _revise_card(self) -> QWidget:
+        """Say what is wrong, on the screen showing the thing that is wrong.
+
+        It lives here rather than on a pane of its own because sending somebody
+        to a blank screen takes away the document they are correcting, and
+        because most notes are written while reading a particular sentence.
+
+        A box rather than a line: "the coordinator is Simone Vasari and site 3
+        was the busiest of the three" is one thought and typing it should not
+        feel like overflowing a field.
+        """
+        from PyQt6.QtWidgets import QSizePolicy
+
+        card = QFrame()
+        role(card, "card")
+        # Never taller than it needs. Without this the card absorbs the space
+        # left over when the note box is hidden, and the spent state renders as
+        # a heading over a large empty panel.
+        card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        layout = QVBoxLayout(card)
+        layout.setSpacing(6)
+
+        head = QLabel("Something wrong, or something it did not know?")
+        role(head, "h2")
+        layout.addWidget(head)
+
+        self.revise_blurb = QLabel(
+            "Say it in your own words. It will look up any names you give it, "
+            "then write both documents again."
+        )
+        self.revise_blurb.setWordWrap(True)
+        self.revise_blurb.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
+        role(self.revise_blurb, "muted")
+        layout.addWidget(self.revise_blurb)
+
+        # Shown only after a pass has said it cannot do something. Doing
+        # nothing is indistinguishable from ignoring them, and somebody who
+        # thinks they were ignored retypes it and pays for another pass.
+        self.impossible = QLabel("")
+        self.impossible.setWordWrap(True)
+        # A wrapping label defaults to expanding vertically, which is how the
+        # card grew a dead panel below the text once the note box was hidden.
+        self.impossible.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
+        role(self.impossible, "danger")
+        self.impossible.hide()
+        layout.addWidget(self.impossible)
+
+        self.notes_box = QPlainTextEdit()
+        self.notes_box.setPlaceholderText(
+            "The coordinator is Simone Vasari, and Speaker 3 is Miles Nadeau."
+        )
+        self.notes_box.setFixedHeight(72)
+        layout.addWidget(self.notes_box)
+
+        row = QHBoxLayout()
+        self.revisions_left = QLabel("")
+        self.revisions_left.setWordWrap(True)
+        role(self.revisions_left, "muted")
+        row.addWidget(self.revisions_left, 1)
+        self.send_revision = QPushButton("Look this up and write it again")
+        self.send_revision.clicked.connect(self._send_revision)
+        row.addWidget(self.send_revision)
+        layout.addLayout(row)
+        return card
+
+    def _send_revision(self):
+        text = self.notes_box.toPlainText().strip()
+        if text:
+            self.revision_requested.emit(text)
+
+    def set_revisions(self, left: int):
+        """How many rewrites are left, and the end of the road when there are none.
+
+        Shown rather than discovered, because somebody typing their fifth note
+        should know it is their last before they spend a quarter of an hour on
+        it.
+        """
+        self.send_revision.setVisible(left > 0)
+        if left <= 0:
+            self.revise_blurb.setText(
+                "This has been rewritten five times. Whatever is still wrong "
+                "needs a person rather than another pass, so edit the document "
+                "yourself from here."
+            )
+            self.revisions_left.setText("")
+            self.notes_box.hide()
+            return
+        self.revise_blurb.setText(
+            "Say it in your own words. It will look up any names you give it, "
+            "then write both documents again."
+        )
+        self.notes_box.show()
+        self.revisions_left.setText(
+            "" if left > 2
+            else f"{left} more rewrite{'s' if left != 1 else ''} after this one."
+            if left > 1 else "One more rewrite after this one."
+        )
+
+    def show_impossible(self, items):
+        """What the last pass could not do, said plainly."""
+        lines = [str(i).strip() for i in (items or []) if str(i).strip()]
+        self.impossible.setText(
+            "" if not lines
+            else "It could not do this, and changed nothing for it:\n"
+            + "\n".join(f"  - {line}" for line in lines)
+        )
+        self.impossible.setVisible(bool(lines))
 
     # --- what the window drives -----------------------------------------------
 
@@ -517,6 +679,7 @@ class WriteUpView(QWidget):
         self.warnings.setText("\n".join(trouble))
         self.warnings.setVisible(bool(trouble))
         self.published.hide()
+        self.notes_box.clear()
         self._show_document("summary")
         self.panes.setCurrentIndex(PANE_DONE)
 

@@ -50,6 +50,11 @@ class _FakeWriteUp:
     def write_documents(self):
         return self._record("write", "documents")
 
+    def revise(self, notes, on_search=None):
+        if on_search:
+            on_search("Simone Vasari")
+        return self._record("revise", "a revision", notes=notes)
+
 
 def _run(worker):
     """Run the step synchronously, which is what QThread.run does anyway."""
@@ -123,7 +128,7 @@ def test_the_write_up_is_not_stored_under_the_name_run(qt_app):
 
 
 def test_every_step_has_something_to_show_on_screen():
-    for step in ("context", "speakers", "questions", "answers", "write"):
+    for step in ("context", "speakers", "questions", "answers", "write", "revise"):
         assert LABELS[step]
     assert WriteUpWorker(_FakeWriteUp(), "context").label == LABELS["context"]
 
@@ -244,7 +249,7 @@ def test_each_step_has_a_short_name_for_the_heading():
     and a "this" nobody can point at."""
     from src.ui.podcastnotes.writeup_worker import PHASES
 
-    for step in ("context", "speakers", "questions", "answers", "write"):
+    for step in ("context", "speakers", "questions", "answers", "write", "revise"):
         assert PHASES[step]
         assert len(PHASES[step].split()) <= 2, f"{step} is not one or two words"
 
@@ -275,7 +280,7 @@ def test_the_worker_offers_its_phase(qt_app):
 def test_every_step_has_a_measured_typical_length():
     from src.ui.podcastnotes.writeup_worker import TYPICAL_SECONDS
 
-    for step in ("context", "speakers", "questions", "answers", "write"):
+    for step in ("context", "speakers", "questions", "answers", "write", "revise"):
         assert TYPICAL_SECONDS[step] > 0
 
 
@@ -314,3 +319,53 @@ def test_a_search_that_returns_is_reported_as_a_finding(qt_app):
     worker._searched("Miles Nadeau", 12)
 
     assert seen == ["Searched for Miles Nadeau"], "one finding per completed search"
+
+
+# --- rewriting after somebody has read it ----------------------------------------
+
+
+def test_the_note_is_handed_to_the_pipeline(qt_app):
+    run = _FakeWriteUp()
+
+    _run(WriteUpWorker(run, "revise", notes="Speaker 3 is Miles Nadeau"))
+
+    assert ("revise", {"notes": "Speaker 3 is Miles Nadeau"}) in run.calls
+
+
+def test_the_research_and_the_rewrite_are_one_step(qt_app):
+    """Handing back in between would leave the map ahead of the documents, so
+    the finished screen would show the older pair beside a change log computed
+    from the newer map."""
+    run = _FakeWriteUp()
+
+    got = _run(WriteUpWorker(run, "revise", notes="a note"))
+
+    assert [name for name, _ in run.calls] == ["revise", "write"]
+    assert got["result"] == ("a revision", "documents")
+
+
+def test_the_lookups_are_reported_while_it_researches(qt_app):
+    """Ten minutes with a still bar reads as a hang, and this pass has the same
+    agentic loop behind it as the cold one."""
+    got = _run(WriteUpWorker(_FakeWriteUp(), "revise", notes="a note"))
+
+    assert "Looking up: Simone Vasari" in got["progress"]
+
+
+def test_the_rewrite_says_which_part_of_the_job_it_is(qt_app):
+    worker = WriteUpWorker(_FakeWriteUp(), "revise")
+
+    assert worker.phase == "Rewriting"
+    assert worker.label != "Working"
+
+
+def test_running_out_of_rewrites_is_explained_rather_than_raised():
+    """A person on their sixth "still wrong" needs to be told the tool is out
+    of moves, not shown a traceback."""
+    from src.podcastnotes.pipeline import RevisionsExhausted
+
+    said = explain(RevisionsExhausted("five is the limit"))
+
+    assert "five times" in said
+    assert "save them and edit" in said
+    assert "RevisionsExhausted" not in said

@@ -27,10 +27,13 @@ class _FakeWorker:
 
     started = []
 
-    def __init__(self, writeup, step, answers=None, library_path="", parent=None):
+    def __init__(self, writeup, step, answers=None, library_path="", notes="",
+                 parent=None):
         self.writeup = writeup
         self.step = step
         self.answers = answers
+        self.notes = notes
+        _FakeWorker.notes.append(notes)
         self.label = f"doing {step}"
         self.phase = step.title()
         self._on_done = None
@@ -40,6 +43,8 @@ class _FakeWorker:
         self.failed = _Signal()
         self.completed = _Signal()
         self.typical_seconds = 60
+
+    notes = []
 
     def isRunning(self):
         return False
@@ -87,6 +92,12 @@ class _FakeWriteUp:
         self.transcript = "TRANSCRIPT"
         self.confirmed = None
         self.corrections_applied = False
+        self.revisions_left = 5
+        self.impossible = []
+        self.revised = []
+
+    def revise(self, notes, on_search=None):
+        self.revised.append(notes)
 
     def apply_corrections(self):
         self.corrections_applied = True
@@ -102,6 +113,7 @@ class _FakeWriteUp:
 def window(qt_app, monkeypatch, tmp_path):
     _FakeWorker.started = []
     _FakeWorker.results = {}
+    _FakeWorker.notes = []
     monkeypatch.setattr("src.ui.main_window.WriteUpWorker", _FakeWorker)
 
     win = MainWindow()
@@ -500,3 +512,134 @@ def test_cancelling_the_save_dialog_writes_nothing(window, monkeypatch):
     window._save_write_up()
 
     assert window._kept is False
+
+
+# --- correcting the finished pair ------------------------------------------------
+
+
+def _revise(window, notes="the coordinator is Simone Vasari"):
+    window.writeup_view.revision_requested.emit(notes)
+
+
+def test_the_note_reaches_the_worker(window):
+    _FakeWorker.results = {}
+
+    _revise(window)
+
+    assert _FakeWorker.started == ["revise"]
+    assert _FakeWorker.notes[-1] == "the coordinator is Simone Vasari"
+
+
+def test_retrying_a_failed_rewrite_sends_the_same_note_again(window):
+    """Otherwise the retry spends a full pass on an empty note, which returns
+    nothing and looks like the retry silently failing."""
+    _FakeWorker.results = {"revise": ConnectionError("Glean is unavailable")}
+    _revise(window, "Speaker 3 is Miles Nadeau")
+    _FakeWorker.started = []
+    _FakeWorker.results = {}
+
+    window._retry_writeup()
+
+    assert _FakeWorker.started == ["revise"]
+    assert _FakeWorker.notes[-1] == "Speaker 3 is Miles Nadeau"
+
+
+def test_the_rewritten_pair_replaces_the_old_one(window):
+    from src.podcastnotes.output import Documents
+
+    found = object()
+    documents = Documents(transcript="NEW T", summary="NEW S")
+    _FakeWorker.results = {"revise": (found, documents)}
+
+    _revise(window)
+
+    assert window.writeup_view._documents is documents
+
+
+def test_what_could_not_be_done_is_carried_to_the_screen(window):
+    """Shown even when the rewrite otherwise succeeded, because "I did four of
+    the five things you asked" is the honest report."""
+    from src.podcastnotes.output import Documents
+
+    window.writeup.impossible = ["Nobody mentions a Dr Okafor."]
+    _FakeWorker.results = {"revise": (object(), Documents(transcript="t", summary="s"))}
+
+    _revise(window)
+
+    assert "Dr Okafor" in window.writeup_view.impossible.text()
+
+
+def test_the_first_writing_clears_a_complaint_from_a_previous_trip(window):
+    from src.podcastnotes.output import Documents
+
+    window.writeup_view.show_impossible(["stale"])
+    _FakeWorker.results = {"write": Documents(transcript="t", summary="s")}
+
+    window._run_step("write")
+
+    assert window.writeup_view.impossible.isHidden() is True
+
+
+def test_how_many_rewrites_are_left_reaches_the_screen(window):
+    from src.podcastnotes.output import Documents
+
+    window.writeup.revisions_left = 1
+    _FakeWorker.results = {"write": Documents(transcript="t", summary="s")}
+
+    window._run_step("write")
+
+    assert "One more rewrite" in window.writeup_view.revisions_left.text()
+
+
+def _asks(monkeypatch, answer):
+    """Stand in for the confirmation, and record whether it was reached."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    shown = []
+
+    def fake(parent, title, text, buttons=None, default=None):
+        shown.append(text)
+        return answer
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake))
+    return shown
+
+
+def test_the_last_rewrite_is_confirmed_before_it_starts(window, monkeypatch):
+    """Ten minutes and the end of the road. Worth being sure about, unlike the
+    first four, which are cheap to be wrong about."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    window.writeup.revisions_left = 1
+    shown = _asks(monkeypatch, QMessageBox.StandardButton.Ok)
+    _FakeWorker.results = {}
+
+    _revise(window)
+
+    assert "last rewrite" in shown[0]
+    assert _FakeWorker.started == ["revise"]
+
+
+def test_cancelling_the_last_rewrite_spends_nothing(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    window.writeup.revisions_left = 1
+    _asks(monkeypatch, QMessageBox.StandardButton.Cancel)
+
+    _revise(window)
+
+    assert _FakeWorker.started == []
+
+
+def test_the_earlier_rewrites_are_not_worth_interrupting_for(window, monkeypatch):
+    """Four confirmations for four cheap decisions is the dialog nobody reads."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    window.writeup.revisions_left = 3
+    shown = _asks(monkeypatch, QMessageBox.StandardButton.Cancel)
+    _FakeWorker.results = {}
+
+    _revise(window)
+
+    assert shown == []
+    assert _FakeWorker.started == ["revise"]
