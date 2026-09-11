@@ -48,6 +48,7 @@ class WriteUpWorker(QThread):
         self.step = step
         self.answers = answers or {}
         self.library_path = library_path
+        self._searches = 0
 
     @property
     def label(self) -> str:
@@ -72,8 +73,22 @@ class WriteUpWorker(QThread):
             return self.writeup.write_documents()
         raise ValueError(f"There is no write-up step called {self.step!r}.")
 
-    def _searched(self, query: str):
-        self.progress.emit(f"Looking up: {query}")
+    def _searched(self, query: str, found=None):
+        """Say what is happening now, not what happened last.
+
+        Reporting only the start of each search leaves the line sitting on a
+        finished lookup while Claude reads what came back, which takes up to a
+        minute at this effort level and reads as a hang. Watched happening on
+        a real run.
+        """
+        self._searches += 1
+        if found is None:
+            self.progress.emit(f"Looking up: {query}")
+        else:
+            self.progress.emit(
+                f"Reading {found} result{'s' if found != 1 else ''} for “{query}”, "
+                f"{self._searches // 2} searches so far"
+            )
 
 
 def explain(error: Exception) -> str:

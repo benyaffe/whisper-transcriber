@@ -186,15 +186,19 @@ class WriteUp:
             self.working(), self.context_map,
             already_asked=self.asked, number=self.round_number, client=client,
         )
+        # Recorded when asked, not when answered. Skipping is allowed, and a
+        # skipped question that is not recorded comes straight back in the next
+        # round: the real run asked about Simone, Marchetti and Whitlock in all
+        # three rounds, which is the whole budget spent on the same four things.
+        self.asked.extend(q.marker for q in found.questions if q.marker not in self.asked)
         if not found.questions:
             self._advance(Step.WRITE)
-            self.save()
+        self.save()
         return found
 
     def answer(self, answers: dict, client=None):
         """Fold the answers in and move on to the next round, or to writing."""
         self._require(Step.QUESTIONS)
-        self.asked.extend(m for m in (answers or {}) if m not in self.asked)
         if answers:
             self.context_map = qa.absorb(self.context_map, answers, client=client)
         self.round_number += 1

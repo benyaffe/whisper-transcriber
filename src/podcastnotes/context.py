@@ -158,7 +158,7 @@ def build(
     description: str,
     transcript: str,
     max_searches: int = MAX_SEARCHES,
-    on_search=None,
+    on_search=None,  # called (query, None) when a search starts, (query, n) when it returns
     client=None,
     search=None,
 ) -> ContextMap:
@@ -182,9 +182,11 @@ def build(
             return "No query given."
         searched.append(query)
         if on_search:
-            on_search(query)
+            on_search(query, None)
         try:
             hits = search(query)
+            if on_search:
+                on_search(query, len(hits))
         except glean.NotConfigured as e:
             # The credential died mid-run. Not a bad query, and every
             # remaining search will fail the same way.

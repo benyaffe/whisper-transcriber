@@ -243,12 +243,13 @@ def test_a_round_with_nothing_to_ask_moves_on_to_writing(tmp_path):
     assert run.step is Step.WRITE
 
 
-def test_markers_already_asked_about_are_remembered_across_rounds(tmp_path):
+def test_answering_advances_to_the_next_round(tmp_path):
+    """What was asked is recorded when it is asked, not when it is answered,
+    so this only has to move the round on. See the skip test below for why."""
     run = _ready(tmp_path, step=Step.QUESTIONS)
 
     run.answer({"Kessler": "It is Crockett."}, client=_client({"settled": [], "corrections": []}))
 
-    assert run.asked == ["Kessler"]
     assert run.round_number == 2
 
 
@@ -384,3 +385,34 @@ def _client(payload):
         messages = _Messages()
 
     return _Client()
+
+
+def test_a_skipped_question_is_not_asked_again(tmp_path):
+    """Found on a real run. Skipping recorded nothing, so the next round
+    proposed the same markers: Simone, Marchetti and Whitlock were all asked in
+    every one of the three rounds, spending the whole budget on four things."""
+    run = _ready(tmp_path, step=Step.QUESTIONS)
+    asking = _client({"questions": [
+        {"marker": "Kessler", "ask": "Who?"},
+    ]})
+
+    first = run.next_questions(client=asking)
+    run.answer({}, client=_client({"settled": [], "corrections": []}))
+
+    assert [q.marker for q in first.questions] == ["Kessler"]
+    assert run.asked == ["Kessler"]
+
+
+def test_an_answered_question_is_also_recorded(tmp_path):
+    run = _ready(tmp_path, step=Step.QUESTIONS)
+    run.next_questions(client=_client({"questions": [{"marker": "Kessler", "ask": "Who?"}]}))
+
+    assert run.asked == ["Kessler"]
+
+
+def test_what_was_asked_survives_a_closed_window(tmp_path):
+    """Otherwise reopening the trip re-asks everything already put to them."""
+    run = _ready(tmp_path, step=Step.QUESTIONS)
+    run.next_questions(client=_client({"questions": [{"marker": "Kessler", "ask": "Who?"}]}))
+
+    assert WriteUp.resume(str(tmp_path), _original()).asked == ["Kessler"]

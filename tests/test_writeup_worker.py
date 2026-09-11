@@ -210,3 +210,29 @@ def test_no_failure_message_uses_jargon(error):
 
     for word in JARGON:
         assert word not in prose, f"{word!r} in: {prose}"
+
+
+def test_the_line_moves_on_when_a_search_returns(qt_app):
+    """Reporting only the start leaves the line sitting on a finished lookup
+    while Claude reads what came back, which takes up to a minute at this
+    effort and reads as a hang. Watched happening on a real run."""
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+    seen = []
+    worker.progress.connect(seen.append)
+
+    worker._searched("Devan Shaw")
+    worker._searched("Devan Shaw", 16)
+
+    assert seen[0] == "Looking up: Devan Shaw"
+    assert "Reading 16 results" in seen[1]
+    assert seen[0] != seen[1], "the line did not change when the search returned"
+
+
+def test_one_result_is_not_reported_as_results(qt_app):
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+    seen = []
+    worker.progress.connect(seen.append)
+
+    worker._searched("Anya", 1)
+
+    assert "Reading 1 result for" in seen[0]
