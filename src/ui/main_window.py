@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.writeup = None
         self.writeup_worker = None
         self._last_step = "context"
+        self._estimate_timer = None
         # Whether this write-up has been put somewhere the person chose.
         self._kept = False
         self._stall_timer = None
@@ -287,11 +288,37 @@ class MainWindow(QMainWindow):
             self.writeup_worker.label, phase=self.writeup_worker.phase
         )
         self.writeup_worker.progress.connect(self.writeup_view.note)
+        self.writeup_worker.found.connect(self.writeup_view.note_finding)
         self.writeup_worker.failed.connect(self.writeup_view.on_failed)
         self.writeup_worker.completed.connect(
             lambda result, done=step: self._step_finished(done, result)
         )
         self.writeup_worker.start()
+        self._start_estimate()
+
+    def _start_estimate(self):
+        """Tick the estimated progress bar while a long step runs.
+
+        On a timer rather than from the worker, because the worker is busy
+        inside a network call for most of the time it is running and cannot
+        report anything while it is.
+        """
+        from PyQt6.QtCore import QTimer
+
+        if self._estimate_timer is None:
+            self._estimate_timer = QTimer(self)
+            self._estimate_timer.timeout.connect(self._tick_estimate)
+        self._estimate_timer.start(1000)
+
+    def _tick_estimate(self):
+        worker = self.writeup_worker
+        if worker is None or not worker.isRunning():
+            self._estimate_timer.stop()
+            return
+        fraction = worker.elapsed_fraction()
+        self.writeup_view.set_estimate(
+            fraction, worker.typical_seconds * (1.0 - fraction)
+        )
 
     def _retry_writeup(self):
         """Whatever failed, try that same step again rather than starting over.

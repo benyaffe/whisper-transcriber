@@ -153,6 +153,7 @@ class WriteUpView(QWidget):
         self._questions = []
         self._corrections = []
         self._player = None
+        self._findings = []
         # Where the next seek should land. Held rather than applied, because
         # the media may not be loaded yet.
         self._wanted_at = None
@@ -187,18 +188,35 @@ class WriteUpView(QWidget):
         self.stage.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.stage)
 
+        # An estimate from measured runs, and the screen says so. The agentic
+        # loop cannot predict its own length, so this is the shape of a typical
+        # run rather than a claim about this one. A bar that never moves for
+        # six minutes reads as a hang, which is worse than an honest guess.
         self.bar = QProgressBar()
-        # Indeterminate on purpose. These steps take minutes and have no
-        # measurable fraction, and a bar that guesses is worse than one that
-        # only says "still going".
-        self.bar.setRange(0, 0)
-        layout.addWidget(self.bar)
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setMaximumWidth(READABLE_WIDTH)
+        layout.addWidget(self.bar, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.estimate = QLabel("")
+        self.estimate.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        role(self.estimate, "faint")
+        layout.addWidget(self.estimate)
 
         self.detail = QLabel("")
         self.detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.detail.setWordWrap(True)
         role(self.detail, "muted")
         layout.addWidget(self.detail)
+
+        # What it has actually turned up, newest last. Real information rather
+        # than decoration: a name appearing is proof the thing is working, in a
+        # way a spinner never is.
+        self.findings = QTextBrowser()
+        self.findings.setMaximumWidth(READABLE_WIDTH)
+        self.findings.setMaximumHeight(150)
+        self.findings.hide()
+        layout.addWidget(self.findings, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.problem = QLabel("")
         self.problem.setWordWrap(True)
@@ -400,6 +418,32 @@ class WriteUpView(QWidget):
     def set_audio(self, path: str):
         self._audio_path = path or ""
 
+    def note_finding(self, line: str):
+        """One more thing it has turned up."""
+        self._findings.append(line)
+        self.findings.setPlainText("\n".join(self._findings[-40:]))
+        self.findings.verticalScrollBar().setValue(
+            self.findings.verticalScrollBar().maximum()
+        )
+        self.findings.show()
+
+    def set_estimate(self, fraction: float, seconds_left: float):
+        """Move the bar, and say in minutes how much is left.
+
+        Minutes, like the transcription estimate, and for the same reason: the
+        number swings and seconds claim a precision it does not have.
+        """
+        self.bar.setValue(int(max(0.0, min(fraction, 1.0)) * 100))
+        if seconds_left <= 0:
+            self.estimate.setText("Nearly there")
+        elif seconds_left < 60:
+            self.estimate.setText("Estimate: less than a minute left")
+        else:
+            minutes = -(-int(seconds_left) // 60)
+            self.estimate.setText(
+                f"Estimate: about {minutes} minute{'s' if minutes != 1 else ''} left"
+            )
+
     def working(self, stage: str, detail: str = "", phase: str = ""):
         """Show a long step running, and clear any previous failure.
 
@@ -414,6 +458,12 @@ class WriteUpView(QWidget):
         self.problem.hide()
         self.retry.hide()
         self.bar.show()
+        self.bar.setValue(0)
+        self.estimate.setText("")
+        # Findings belong to the step that found them.
+        self._findings = []
+        self.findings.clear()
+        self.findings.hide()
         self.panes.setCurrentIndex(PANE_WAITING)
 
     def note(self, detail: str):
@@ -425,6 +475,7 @@ class WriteUpView(QWidget):
         self.problem.show()
         self.retry.show()
         self.bar.hide()
+        self.estimate.setText("")
         self.title.setText("The write-up stopped")
         self.stage.setText("")
         # The last thing it was doing has to go with it. Left in place, "Looking

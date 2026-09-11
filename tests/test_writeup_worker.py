@@ -267,3 +267,50 @@ def test_the_worker_offers_its_phase(qt_app):
     worker = WriteUpWorker(_FakeWriteUp(), "context")
 
     assert worker.phase == "Background"
+
+
+# --- estimating ------------------------------------------------------------------
+
+
+def test_every_step_has_a_measured_typical_length():
+    from src.ui.podcastnotes.writeup_worker import TYPICAL_SECONDS
+
+    for step in ("context", "speakers", "questions", "answers", "write"):
+        assert TYPICAL_SECONDS[step] > 0
+
+
+def test_nothing_has_run_means_nothing_to_estimate(qt_app):
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+
+    assert worker.elapsed_fraction() == 0.0
+
+
+def test_the_estimate_never_claims_to_be_finished(qt_app):
+    """Reaching 100% and then continuing turns an estimate that was merely
+    wrong into one that is visibly lying."""
+    import time
+
+    worker = WriteUpWorker(_FakeWriteUp(), "speakers")
+    worker._started = time.monotonic() - worker.typical_seconds * 10
+
+    assert worker.elapsed_fraction() < 1.0
+
+
+def test_the_estimate_grows_with_time(qt_app):
+    import time
+
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+    worker._started = time.monotonic() - worker.typical_seconds / 2
+
+    assert 0.4 < worker.elapsed_fraction() < 0.6
+
+
+def test_a_search_that_returns_is_reported_as_a_finding(qt_app):
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+    seen = []
+    worker.found.connect(seen.append)
+
+    worker._searched("Miles Nadeau")
+    worker._searched("Miles Nadeau", 12)
+
+    assert seen == ["Searched for Miles Nadeau"], "one finding per completed search"

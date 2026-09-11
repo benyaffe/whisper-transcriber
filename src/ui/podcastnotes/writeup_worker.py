@@ -34,6 +34,22 @@ LABELS = {
 # rather than standing on "Writing this up" for a quarter of an hour. "This" is
 # nothing anybody can point at, and the same three words through five different
 # stages reads as an app that has stopped.
+# Roughly how long each step takes, in seconds, measured on the real Ashford
+# trip: three recordings, forty-two minutes of audio, a map of eighteen people.
+#
+# An estimate, and labelled as one on screen. The context stage is an agentic
+# loop that genuinely cannot predict its own length, so this is the shape of a
+# typical run rather than a prediction about this one. It exists because a bar
+# that never moves for six minutes reads as a hang, and because "about four
+# minutes left" is a more useful thing to know than nothing.
+TYPICAL_SECONDS = {
+    "context": 360,
+    "speakers": 40,
+    "questions": 40,
+    "answers": 60,
+    "write": 420,
+}
+
 PHASES = {
     "context": "Background",
     "speakers": "Speakers",
@@ -47,6 +63,8 @@ class WriteUpWorker(QThread):
     """One step of a write-up, on a background thread."""
 
     progress = pyqtSignal(str)      # a line for the status pane
+    found = pyqtSignal(str)         # something learned, for the running list
+    fraction = pyqtSignal(float)    # 0..1, an estimate and shown as one
     completed = pyqtSignal(object)  # whatever the step produced
     failed = pyqtSignal(str)        # already phrased for a person
 
@@ -61,6 +79,8 @@ class WriteUpWorker(QThread):
         self.answers = answers or {}
         self.library_path = library_path
         self._searches = 0
+        self._started = 0.0
+        self._ticker = None
 
     @property
     def label(self) -> str:
@@ -71,7 +91,27 @@ class WriteUpWorker(QThread):
         """The heading: where in the job this is, in a word or two."""
         return PHASES.get(self.step, "Working")
 
+    @property
+    def typical_seconds(self) -> int:
+        return TYPICAL_SECONDS.get(self.step, 120)
+
+    def elapsed_fraction(self) -> float:
+        """How far along a typical run of this step would be by now.
+
+        Capped just short of full, because arriving at 100% and then continuing
+        is worse than never claiming to know: it turns an estimate that was
+        merely wrong into one that is visibly lying.
+        """
+        import time
+
+        if not self._started:
+            return 0.0
+        return min((time.monotonic() - self._started) / self.typical_seconds, 0.97)
+
     def run(self):
+        import time
+
+        self._started = time.monotonic()
         try:
             self.completed.emit(self._do())
         except Exception as e:
@@ -106,6 +146,7 @@ class WriteUpWorker(QThread):
                 f"Reading {found} result{'s' if found != 1 else ''} for “{query}”, "
                 f"{self._searches // 2} searches so far"
             )
+            self.found.emit(f"Searched for {query}")
 
 
 def explain(error: Exception) -> str:

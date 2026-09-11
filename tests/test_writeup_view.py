@@ -797,3 +797,81 @@ def test_the_preview_says_which_document_is_on_screen(view):
     view.show_transcript.click()
 
     assert "transcript" in view.showing.text().lower()
+
+
+# --- something to look at while it works -----------------------------------------
+
+
+def test_findings_appear_as_they_are_found(view):
+    """Real information rather than decoration: a name appearing is proof the
+    thing is working, in a way a spinner never is."""
+    view.working("Reading the background", phase="Background")
+
+    view.note_finding("Searched for Miles Nadeau")
+    view.note_finding("Searched for Simone Vasari")
+
+    assert view.findings.isHidden() is False
+    assert "Miles Nadeau" in view.findings.toPlainText()
+    assert "Simone Vasari" in view.findings.toPlainText()
+
+
+def test_findings_belong_to_the_step_that_found_them(view):
+    view.working("Reading the background", phase="Background")
+    view.note_finding("Searched for Miles Nadeau")
+
+    view.working("Writing the documents", phase="Writing")
+
+    assert view.findings.toPlainText() == ""
+    assert view.findings.isHidden() is True
+
+
+def test_the_list_does_not_grow_without_limit(view):
+    view.working("Reading the background", phase="Background")
+
+    for i in range(200):
+        view.note_finding(f"Searched for thing {i}")
+
+    assert len(view.findings.toPlainText().splitlines()) <= 40
+
+
+@pytest.mark.parametrize("seconds,expected", [
+    (240, "about 4 minutes left"),
+    (60, "about 1 minute left"),
+    (30, "less than a minute left"),
+    (0, "Nearly there"),
+])
+def test_the_estimate_is_in_whole_minutes(view, seconds, expected):
+    """Same as the transcription estimate, for the same reason: the number
+    swings, and seconds claim a precision it does not have."""
+    view.set_estimate(0.5, seconds)
+
+    assert expected in view.estimate.text()
+
+
+def test_the_estimate_says_it_is_an_estimate(view):
+    """The agentic loop cannot predict its own length. Saying so is the
+    difference between a guess and a claim."""
+    view.set_estimate(0.5, 240)
+
+    assert "Estimate" in view.estimate.text()
+
+
+def test_the_bar_moves(view):
+    view.set_estimate(0.42, 200)
+
+    assert view.bar.value() == 42
+
+
+def test_the_bar_cannot_exceed_full(view):
+    view.set_estimate(1.8, 0)
+
+    assert view.bar.value() == 100
+
+
+def test_a_new_step_starts_the_bar_over(view):
+    view.set_estimate(0.9, 20)
+
+    view.working("Writing the documents", phase="Writing")
+
+    assert view.bar.value() == 0
+    assert view.estimate.text() == ""

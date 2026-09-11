@@ -36,8 +36,16 @@ class _FakeWorker:
         self._on_done = None
         self._on_fail = None
         self.progress = _Signal()
+        self.found = _Signal()
         self.failed = _Signal()
         self.completed = _Signal()
+        self.typical_seconds = 60
+
+    def isRunning(self):
+        return False
+
+    def elapsed_fraction(self):
+        return 0.5
 
     def start(self):
         _FakeWorker.started.append(self.step)
