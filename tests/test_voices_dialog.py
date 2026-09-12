@@ -41,6 +41,23 @@ def _rows(view):
     return [view.list.item(i).text() for i in range(view.list.count())]
 
 
+def _row_for(view, name):
+    """The row for one person, found by name rather than by position.
+
+    The list is alphabetical, so picking row 0 makes a test that silently
+    changes meaning the moment somebody edits a fixture name.
+    """
+    return next(r for r in _rows(view) if r.startswith(name))
+
+
+def _select(view, name):
+    for i in range(view.list.count()):
+        if view.list.item(i).text().startswith(name):
+            view.list.setCurrentRow(i)
+            return
+    raise AssertionError(f"no row for {name}")
+
+
 # --- seeing --------------------------------------------------------------------
 
 
@@ -107,7 +124,7 @@ def test_forgetting_asks_first_and_says_what_goes(dialog, monkeypatch):
     from PyQt6.QtWidgets import QMessageBox
 
     asked = _answers(monkeypatch, QMessageBox.StandardButton.Cancel)
-    dialog.list.setCurrentRow(0)
+    _select(dialog, "Marcus Ellery")
 
     dialog.forget.click()
 
@@ -120,7 +137,7 @@ def test_confirming_forgets_that_voice_and_only_that_one(dialog, monkeypatch, li
     from PyQt6.QtWidgets import QMessageBox
 
     _answers(monkeypatch, QMessageBox.StandardButton.Ok)
-    dialog.list.setCurrentRow(0)
+    _select(dialog, "Marcus Ellery")
 
     dialog.forget.click()
 
@@ -133,7 +150,7 @@ def test_the_list_updates_without_being_reopened(dialog, monkeypatch):
     from PyQt6.QtWidgets import QMessageBox
 
     _answers(monkeypatch, QMessageBox.StandardButton.Ok)
-    dialog.list.setCurrentRow(0)
+    _select(dialog, "Marcus Ellery")
 
     dialog.forget.click()
 
@@ -146,7 +163,7 @@ def test_the_warning_promises_that_written_documents_are_untouched(dialog, monke
     from PyQt6.QtWidgets import QMessageBox
 
     asked = _answers(monkeypatch, QMessageBox.StandardButton.Cancel)
-    dialog.list.setCurrentRow(0)
+    _select(dialog, "Marcus Ellery")
 
     dialog.forget.click()
 

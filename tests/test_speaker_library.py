@@ -300,7 +300,7 @@ def test_a_remembered_voice_can_be_listed_with_its_context(tmp_path):
     assert entries == [{
         "name": "Anya Petrov-Hale", "samples": 2,
         "last_heard": entries[0]["last_heard"],
-        "trips": ["Cleveland", "Ashford"],
+        "trips": ["Ashford", "Cleveland"],
     }]
     assert entries[0]["last_heard"], "no idea when it was last heard"
 
