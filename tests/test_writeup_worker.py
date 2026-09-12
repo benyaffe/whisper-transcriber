@@ -369,3 +369,51 @@ def test_running_out_of_rewrites_is_explained_rather_than_raised():
     assert "five times" in said
     assert "save them and edit" in said
     assert "RevisionsExhausted" not in said
+
+
+# --- stopping -------------------------------------------------------------------
+
+
+def test_a_search_step_stops_at_the_next_search(qt_app):
+    """The one place a long step reliably hands control back. Checking at the
+    top of each turn instead would mean waiting minutes, because that is how
+    far apart the turns are."""
+    run = _FakeWriteUp()
+    worker = WriteUpWorker(run, "context")
+    worker.cancel()
+
+    got = _run(worker)
+
+    assert "result" not in got and "failed" not in got
+    assert run.calls == [], "it carried on past the stop"
+
+
+def test_stopping_is_not_reported_as_a_failure(qt_app):
+    stopped = []
+    worker = WriteUpWorker(_FakeWriteUp(), "context")
+    worker.cancelled.connect(lambda: stopped.append(True))
+    worker.cancel()
+
+    got = _run(worker)
+
+    assert stopped == [True]
+    assert "failed" not in got
+
+
+def test_a_step_that_finishes_first_still_does_not_carry_the_run_on(qt_app):
+    """Writing is one Claude call of several minutes and cannot be interrupted
+    without leaving half a document, so the stop is checked again when it
+    returns. Emitting the result anyway would advance to the next step, which
+    is the one thing the person just said they did not want."""
+    worker = WriteUpWorker(_FakeWriteUp(), "write")
+    worker.cancel()
+
+    got = _run(worker)
+
+    assert "result" not in got
+
+
+def test_the_screen_can_tell_which_kind_of_step_it_is(qt_app):
+    assert WriteUpWorker(_FakeWriteUp(), "context").stops_promptly is True
+    assert WriteUpWorker(_FakeWriteUp(), "revise").stops_promptly is True
+    assert WriteUpWorker(_FakeWriteUp(), "write").stops_promptly is False

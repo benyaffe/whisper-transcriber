@@ -427,3 +427,32 @@ def test_the_originals_are_left_alone():
 
 def _map_with(**kwargs):
     return context.ContextMap(**kwargs)
+
+
+def test_a_stop_request_ends_the_loop_rather_than_becoming_a_tool_error():
+    """The agentic loop turns a failing tool into an error string and hands it
+    back to Claude, which is right for a bad query and wrong for a person
+    pressing Stop: the run would carry on for another five minutes, having
+    been told twice to stop and reporting nothing about it.
+
+    Raised from `on_search` rather than checked between turns, because the
+    turns are minutes apart and this callback is seconds apart."""
+    from src.podcastnotes.llm.agent import Cancelled
+
+    turns = []
+
+    def stop_on_the_first_search(query, found=None):
+        raise Cancelled("stopped by the person running it")
+
+    client = _FakeClient([
+        _Message([_ToolUse({"query": "nadeau"})], stop_reason="tool_use"),
+        _Message([_Text("this turn should never happen")]),
+    ])
+    original_stream = client.messages.stream
+    client.messages.stream = lambda **kw: (turns.append(kw), original_stream(**kw))[1]
+
+    with pytest.raises(Cancelled):
+        context.build("t", "t", search=_ok_search, client=client,
+                      on_search=stop_on_the_first_search)
+
+    assert len(turns) == 1, "it asked Claude again after being told to stop"

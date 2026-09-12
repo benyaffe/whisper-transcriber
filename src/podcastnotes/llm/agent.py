@@ -55,6 +55,16 @@ MAX_TURNS = 40
 MAX_PARALLEL_TOOLS = 6
 
 
+class Cancelled(Exception):
+    """Somebody asked for this to stop.
+
+    Raised from a callback the loop already makes, rather than checked at the
+    top of each turn, because the turns are minutes apart and the callbacks are
+    seconds apart. It has to be in whatever `fatal` tuple the caller passes, or
+    the loop catches it, hands Claude a tool error and carries on.
+    """
+
+
 class Refused(Exception):
     """Claude declined the request outright.
 

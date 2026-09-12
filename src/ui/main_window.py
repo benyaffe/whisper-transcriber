@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.writeup_view.new_trip_requested.connect(self._start_another_trip)
         self.writeup_view.retry_requested.connect(self._retry_writeup)
         self.writeup_view.revision_requested.connect(self._revision_requested)
+        self.writeup_view.stop_requested.connect(self._stop_writeup)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.setup_view)
@@ -236,6 +237,51 @@ class MainWindow(QMainWindow):
         self.worker.start()
         self._start_stall_watch()
 
+    # How long to give a thread to notice it should stop before giving up on a
+    # clean exit. Generous, because the alternative is Qt tearing down a
+    # running QThread, which aborts the process and can leave a half-written
+    # state file behind it.
+    SHUTDOWN_WAIT_MS = 5000
+
+    def closeEvent(self, event):
+        """Do not let Qt destroy a thread that is still running.
+
+        Without this, quitting mid-run produced "QThread: Destroyed while
+        thread is still running" and an abort. Seen in the render harness
+        before anybody hit it for real.
+
+        Nothing is lost by stopping: the transcript is written as it goes and
+        every write-up step saves as it finishes. What is lost is the step in
+        flight, which is why it asks first.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        running = [w for w in (self.worker, self.writeup_worker)
+                   if w is not None and w.isRunning()]
+        if not running:
+            event.accept()
+            return
+
+        answer = QMessageBox.question(
+            self, "Quit while this is running?",
+            "Something is still running. Everything finished so far is saved, "
+            "and the step in progress will be lost.\n\nQuit anyway?",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Ok:
+            event.ignore()
+            return
+
+        self._stop_stall_watch()
+        for worker in running:
+            worker.cancel()
+        for worker in running:
+            # Waited on separately, so the second thread gets the whole timeout
+            # rather than whatever the first one left of it.
+            worker.wait(self.SHUTDOWN_WAIT_MS)
+        event.accept()
+
     def _cancel_trip(self):
         self._stop_stall_watch()
         if self.worker is not None:
@@ -295,6 +341,7 @@ class MainWindow(QMainWindow):
         self.writeup_worker.progress.connect(self.writeup_view.note)
         self.writeup_worker.found.connect(self.writeup_view.note_finding)
         self.writeup_worker.failed.connect(self.writeup_view.on_failed)
+        self.writeup_worker.cancelled.connect(self._writeup_stopped)
         self.writeup_worker.completed.connect(
             lambda result, done=step: self._step_finished(done, result)
         )
@@ -324,6 +371,23 @@ class MainWindow(QMainWindow):
         self.writeup_view.set_estimate(
             fraction, worker.typical_seconds * (1.0 - fraction)
         )
+
+    def _stop_writeup(self):
+        """Ask the running step to stop, and say when that will happen.
+
+        Nothing is discarded. Every step saves as it finishes, so stopping
+        loses at most the step in flight and the run picks up from there.
+        """
+        worker = self.writeup_worker
+        if worker is None or not worker.isRunning():
+            return
+        worker.cancel()
+        self.writeup_view.note_stopping(worker.stops_promptly)
+
+    def _writeup_stopped(self):
+        if self._estimate_timer is not None:
+            self._estimate_timer.stop()
+        self.writeup_view.on_stopped()
 
     def _retry_writeup(self):
         """Whatever failed, try that same step again rather than starting over.

@@ -42,12 +42,28 @@ class _FakeWorker:
         self.found = _Signal()
         self.failed = _Signal()
         self.completed = _Signal()
+        self.cancelled = _Signal()
+        self.stopped = False
+        self.waited = []
         self.typical_seconds = 60
 
     notes = []
 
+    running = False
+
     def isRunning(self):
-        return False
+        return _FakeWorker.running
+
+    def cancel(self):
+        self.stopped = True
+
+    def wait(self, ms=None):
+        self.waited.append(ms)
+        return True
+
+    @property
+    def stops_promptly(self):
+        return self.step in ("context", "revise")
 
     def elapsed_fraction(self):
         return 0.5
@@ -114,6 +130,7 @@ def window(qt_app, monkeypatch, tmp_path):
     _FakeWorker.started = []
     _FakeWorker.results = {}
     _FakeWorker.notes = []
+    _FakeWorker.running = False
     monkeypatch.setattr("src.ui.main_window.WriteUpWorker", _FakeWorker)
 
     win = MainWindow()
@@ -663,3 +680,135 @@ def test_the_people_the_search_found_reach_the_speaker_screen(window):
     window._run_step("speakers")
 
     assert seen["names"] == ["Anya Petrov-Hale", "Miles Nadeau"]
+
+
+# --- getting out of a quarter of an hour ------------------------------------------
+
+
+def test_stopping_asks_the_running_step_to_stop(window):
+    """Transcription has always had a way out. The write-up did not, so
+    starting one committed you to about fifteen minutes with no exit but
+    quitting the app."""
+    _FakeWorker.results = {}
+    window._run_step("context")
+    _FakeWorker.running = True
+
+    window.writeup_view.stop_requested.emit()
+
+    assert window.writeup_worker.stopped is True
+
+
+def test_stopping_says_how_soon_it_will_happen(window):
+    """A step that calls back between searches stops within a second. The
+    writing is one Claude call of several minutes with nothing to interrupt it,
+    and a button that goes quiet for four minutes reads as one that did
+    nothing."""
+    _FakeWorker.results = {}
+    window._run_step("write")
+    _FakeWorker.running = True
+
+    window.writeup_view.stop_requested.emit()
+
+    assert "when this step finishes" in window.writeup_view.detail.text()
+
+
+def test_stopping_when_nothing_is_running_does_nothing(window):
+    """The button is hidden then, but a keyboard or a double click can still
+    reach it before the screen has caught up."""
+    _FakeWorker.results = {}
+    window._run_step("context")
+    _FakeWorker.running = False
+
+    window.writeup_view.stop_requested.emit()
+
+    assert window.writeup_worker.stopped is False
+
+
+def test_a_stopped_run_offers_the_same_way_forward_as_a_failed_one(window):
+    """It is not phrased as a failure. Somebody who pressed Stop knows why it
+    stopped, and being told the write-up "failed" reads as the app having lost
+    their work rather than having done as it was asked."""
+    _FakeWorker.results = {}
+    window._run_step("context")
+
+    window.writeup_worker.cancelled.emit()
+
+    assert window.writeup_view.retry.isHidden() is False
+    assert "Stopped" in window.writeup_view.problem.text()
+    assert "failed" not in window.writeup_view.problem.text()
+    assert "saved" in window.writeup_view.problem.text()
+
+
+# --- quitting -----------------------------------------------------------------
+
+
+class _CloseEvent:
+    """Stands in for a QCloseEvent, which cannot be constructed usefully here."""
+
+    def __init__(self):
+        self.accepted = None
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
+def test_quitting_with_nothing_running_just_quits(window):
+    event = _CloseEvent()
+
+    window.closeEvent(event)
+
+    assert event.accepted is True
+
+
+def test_quitting_mid_run_asks_first(window, monkeypatch):
+    """Without this, Qt destroys a running QThread, which aborts the process.
+    Seen in the render harness before anybody hit it for real."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    _FakeWorker.results = {}
+    window._run_step("context")
+    _FakeWorker.running = True
+    shown = _asks(monkeypatch, QMessageBox.StandardButton.Cancel)
+    event = _CloseEvent()
+
+    window.closeEvent(event)
+
+    assert shown, "it quit without asking"
+    assert event.accepted is False
+    assert window.writeup_worker.stopped is False
+
+
+def test_quitting_anyway_stops_the_thread_before_letting_go(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    _FakeWorker.results = {}
+    window._run_step("context")
+    _FakeWorker.running = True
+    _asks(monkeypatch, QMessageBox.StandardButton.Ok)
+    event = _CloseEvent()
+
+    window.closeEvent(event)
+
+    assert window.writeup_worker.stopped is True
+    assert window.writeup_worker.waited == [window.SHUTDOWN_WAIT_MS]
+    assert event.accepted is True
+
+
+def test_each_thread_gets_the_whole_timeout(window, monkeypatch):
+    """Waited on in one pass, the second thread gets whatever the first one
+    left, which on a slow stop is nothing at all."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    _FakeWorker.results = {}
+    window._run_step("context")
+    window.worker = _FakeWorker(window.writeup, "transcribe")
+    _FakeWorker.running = True
+    _asks(monkeypatch, QMessageBox.StandardButton.Ok)
+
+    window.closeEvent(_CloseEvent())
+
+    assert window.worker.waited == [window.SHUTDOWN_WAIT_MS]
+    assert window.writeup_worker.waited == [window.SHUTDOWN_WAIT_MS]

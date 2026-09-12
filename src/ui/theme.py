@@ -231,6 +231,10 @@ QPushButton[role="quiet"] {{
     padding: {space_1} {space_2};
 }}
 QPushButton[role="quiet"]:focus {{ background: {accent_soft}; color: {focus}; }}
+/* Without this a disabled quiet button keeps the full accent and reads as
+   clickable. Seen on "Stopping...", where looking pressable is the worst
+   possible thing for it to do. */
+QPushButton[role="quiet"]:disabled {{ color: {text_muted}; }}
 QPushButton[role="quiet"]:hover {{ background: {accent_soft}; }}
 
 /* Containers --------------------------------------------------------- */

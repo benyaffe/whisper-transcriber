@@ -252,3 +252,30 @@ def no_cached_glean_token():
     glean_auth.forget_access_token()
     yield
     glean_auth.forget_access_token()
+
+
+@pytest.fixture(autouse=True)
+def no_blocking_dialogs(monkeypatch):
+    """No test may open a modal nobody can click.
+
+    An offscreen run has no way to dismiss one, so a `QMessageBox.question` that
+    reaches Qt does not fail the test, it hangs the whole suite until somebody
+    notices. That happened the moment `closeEvent` learned to ask before
+    quitting mid-run: two unrelated fixtures blocked in teardown.
+
+    Cancel rather than Ok, so an unguarded prompt takes the path that changes
+    nothing. A test that means to answer one patches it itself, which then
+    wins, because a later `setattr` replaces this.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    for name, answer in (
+        ("question", QMessageBox.StandardButton.Cancel),
+        ("warning", QMessageBox.StandardButton.Cancel),
+        ("information", QMessageBox.StandardButton.Ok),
+        ("critical", QMessageBox.StandardButton.Ok),
+    ):
+        monkeypatch.setattr(
+            QMessageBox, name, staticmethod(lambda *a, _a=answer, **k: _a)
+        )
+    yield

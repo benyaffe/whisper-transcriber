@@ -20,6 +20,8 @@ policy.
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from src.podcastnotes.llm.agent import Cancelled
+
 # What a step is called on the screen while it runs. Present tense, because it
 # is describing what is happening rather than what was asked for.
 LABELS = {
@@ -72,6 +74,7 @@ class WriteUpWorker(QThread):
     fraction = pyqtSignal(float)    # 0..1, an estimate and shown as one
     completed = pyqtSignal(object)  # whatever the step produced
     failed = pyqtSignal(str)        # already phrased for a person
+    cancelled = pyqtSignal()        # asked to stop, and it has
 
     def __init__(self, writeup, step: str, answers: dict = None, library_path: str = "",
                  notes: str = "", parent=None):
@@ -87,6 +90,7 @@ class WriteUpWorker(QThread):
         self._searches = 0
         self._started = 0.0
         self._ticker = None
+        self._cancelled = False
 
     @property
     def label(self) -> str:
@@ -114,14 +118,41 @@ class WriteUpWorker(QThread):
             return 0.0
         return min((time.monotonic() - self._started) / self.typical_seconds, 0.97)
 
+    def cancel(self):
+        """Ask the step to stop. Best effort, and honest about which.
+
+        A research step stops within a second, because it calls back on every
+        search. A writing step cannot: it is one Claude call of several
+        minutes, and there is no way to interrupt it that does not leave a
+        half-written document. So the flag is also checked when the step
+        returns, and the result is thrown away rather than advancing the run.
+        """
+        self._cancelled = True
+
+    @property
+    def stops_promptly(self) -> bool:
+        """Whether cancelling this step takes effect in seconds or in minutes."""
+        return self.step in ("context", "revise")
+
     def run(self):
         import time
 
         self._started = time.monotonic()
         try:
-            self.completed.emit(self._do())
+            result = self._do()
+        except Cancelled:
+            self.cancelled.emit()
+            return
         except Exception as e:
             self.failed.emit(explain(e))
+            return
+        if self._cancelled:
+            # It finished before the stop reached it. Emitting the result
+            # anyway would carry the run on to the next step, which is the one
+            # thing the person just said they did not want.
+            self.cancelled.emit()
+            return
+        self.completed.emit(result)
 
     def _do(self):
         if self.step == "context":
@@ -150,6 +181,10 @@ class WriteUpWorker(QThread):
         minute at this effort level and reads as a hang. Watched happening on
         a real run.
         """
+        # The one place a long step reliably hands control back, so it is
+        # where a stop request is noticed.
+        if self._cancelled:
+            raise Cancelled("stopped by the person running it")
         self._searches += 1
         if found is None:
             self.progress.emit(f"Looking up: {query}")

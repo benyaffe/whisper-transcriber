@@ -237,7 +237,9 @@ def research(
         # Without this the loop turns the outage into an error result and
         # Claude spends the rest of its budget rediscovering that Glean is
         # down, then answers from nothing.
-        fatal=(GleanUnavailable,),
+        # Cancelled too, or the loop turns a stop request into a tool error
+        # and keeps going for another five minutes.
+        fatal=(GleanUnavailable, agent.Cancelled),
     )
     return answer.text, searched
 

@@ -232,6 +232,7 @@ class WriteUpView(QWidget):
     new_trip_requested = pyqtSignal()
     retry_requested = pyqtSignal()
     revision_requested = pyqtSignal(str)
+    stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -309,6 +310,14 @@ class WriteUpView(QWidget):
         self.findings.setMaximumHeight(150)
         self.findings.hide()
         layout.addWidget(self.findings, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Transcription has always had a way out. The write-up did not, so
+        # starting one committed you to about fifteen minutes with no exit but
+        # quitting the app.
+        self.stop = QPushButton("Stop")
+        role(self.stop, "quiet")
+        self.stop.clicked.connect(self.stop_requested)
+        layout.addWidget(self.stop, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.problem = QLabel("")
         self.problem.setWordWrap(True)
@@ -625,6 +634,7 @@ class WriteUpView(QWidget):
         self.detail.setText(detail)
         self.problem.hide()
         self.retry.hide()
+        self.stop.show()
         self.bar.show()
         self.bar.setValue(0)
         self.estimate.setText("")
@@ -637,11 +647,44 @@ class WriteUpView(QWidget):
     def note(self, detail: str):
         self.detail.setText(detail)
 
+    def note_stopping(self, promptly: bool):
+        """Acknowledge the request, and say honestly when it will take effect.
+
+        A step that only calls back between searches stops within a second. The
+        writing is one Claude call of several minutes with nothing to interrupt
+        it, and a button that goes quiet for four minutes reads as a button
+        that did nothing.
+        """
+        self.stop.setEnabled(False)
+        self.stop.setText("Stopping...")
+        self.detail.setText(
+            "Stopping." if promptly
+            else "Stopping when this step finishes. It cannot be interrupted "
+                 "part way through without leaving half a document."
+        )
+
+    def on_stopped(self):
+        """Same shape as a failure, because the way out is the same: try again.
+
+        Not phrased as one. Somebody who pressed Stop knows why it stopped, and
+        being told the write-up "failed" reads as the app having lost their
+        work rather than having done as it was asked.
+        """
+        self.on_failed(
+            "Stopped. The transcript is finished and saved, and the write-up "
+            "picks up from here whenever you want it to."
+        )
+
     def on_failed(self, message: str):
         """A failure with a next move, not a stack trace."""
         self.problem.setText(message)
         self.problem.show()
         self.retry.show()
+        # Nothing is running, so there is nothing to stop. The button is also
+        # reset here, since the next attempt needs it back.
+        self.stop.hide()
+        self.stop.setEnabled(True)
+        self.stop.setText("Stop")
         self.bar.hide()
         self.estimate.setText("")
         self.title.setText("The write-up stopped")

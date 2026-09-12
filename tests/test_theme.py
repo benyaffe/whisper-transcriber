@@ -123,7 +123,8 @@ def test_a_disabled_control_is_still_legible():
     label to work out what would happen if they could press it, and a disabled
     primary button sits on `border` rather than on any of the surfaces."""
     for name in ("QPushButton:disabled", "QLineEdit:disabled, QPlainTextEdit:disabled",
-                 'QPushButton[role="primary"]:disabled'):
+                 'QPushButton[role="primary"]:disabled',
+                 'QPushButton[role="quiet"]:disabled'):
         rule = _rule(name)
         # Not `border-color`, which the naive pattern matched first and which
         # made this assert that a background was readable against a surface.
