@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import QFileDialog, QFrame, QLabel, QTextBrowser, QVBoxLayout
 
+from src.ui.theme import restyle, role
 from src.utils.file_utils import get_supported_extensions
 
 
@@ -22,35 +23,65 @@ class DropZone(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(100)
-        self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
+        self.setMinimumHeight(92)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        # Styled through the theme rather than inline, because an inline
+        # stylesheet on a widget silently wins over the application one and
+        # this widget would then be the only thing that never follows a
+        # theme change.
+        role(self, "dropzone")
         self._set_default_style()
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(2)
 
-        self.label = QLabel("Drop audio/video files here\nor click to browse")
+        self.label = QLabel("Drop recordings here")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setStyleSheet("color: #666; font-size: 14px;")
+        role(self.label, "h2")
         layout.addWidget(self.label)
+
+        self.sublabel = QLabel("or click to choose files")
+        self.sublabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        role(self.sublabel, "muted")
+        layout.addWidget(self.sublabel)
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def set_compact(self, compact: bool):
+        """Shrink once there is something in the list.
+
+        A full-height target is the right thing to offer an empty screen and
+        the wrong thing to keep once it has been used, where it just pushes
+        the actual content down.
+
+        Returns early when nothing has changed. It is called from the intake
+        screen's refresh, which runs on every keystroke, and a style unpolish
+        and repolish plus a layout invalidation per character is not free.
+        """
+        if getattr(self, "_compact", None) == compact:
+            return
+        self._compact = compact
+        self.sublabel.setVisible(not compact)
+        self.label.setText("Add more" if compact else "Drop recordings here")
+        role(self.label, "muted" if compact else "h2")
+        self.setMinimumHeight(44 if compact else 92)
+        self.setMaximumHeight(44 if compact else 16777215)
+        restyle(self.label)
+
     def _set_default_style(self):
-        self.setStyleSheet(
-            "DropZone { border: 2px dashed #888; border-radius: 10px; background-color: #f5f5f5; }"
-        )
+        self.setProperty("hover", False)
+        restyle(self)
 
     def _set_hover_style(self):
-        self.setStyleSheet(
-            "DropZone { border: 2px solid #4a90d9; border-radius: 10px; background-color: #d0e4fc; }"
-        )
+        self.setProperty("hover", True)
+        restyle(self)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             extensions = get_supported_extensions()
             filter_str = f"Media Files ({' '.join('*' + ext for ext in extensions)})"
-            files, _ = QFileDialog.getOpenFileNames(self, "Select Audio/Video Files", "", filter_str)
+            files, _ = QFileDialog.getOpenFileNames(self, "Choose recordings", "", filter_str)
             if files:
                 self.files_dropped.emit(files)
 
@@ -80,27 +111,14 @@ class ClickablePreview(QTextBrowser):
         self.setOpenLinks(False)
         self.anchorClicked.connect(self._handle_anchor)
 
-        # Set document stylesheet for timestamp styling (this actually works in QTextBrowser)
-        # Note: Use Menlo as primary - it's guaranteed on macOS
-        self.document().setDefaultStyleSheet("""
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-                font-size: 13px;
-            }
-            a.ts {
-                font-family: Menlo, Monaco, Courier;
-                color: #2962ff;
-                text-decoration: none;
-            }
-            .status {
-                color: #666;
-                font-style: italic;
-            }
-            .warning {
-                color: #c90;
-                font-style: italic;
-            }
-        """)
+        # A QTextBrowser lays its content out with Qt's rich-text engine, so
+        # the application stylesheet does not reach inside it and it needs its
+        # own. Generated from the same tokens as everything else: the colours
+        # used to be written out here by hand, which made this the one widget
+        # that ignored any change to the theme.
+        from src.ui.theme import document_stylesheet
+
+        self.document().setDefaultStyleSheet(document_stylesheet())
 
     def _handle_anchor(self, url: QUrl):
         """Handle timestamp link clicks."""

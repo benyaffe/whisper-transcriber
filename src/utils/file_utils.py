@@ -121,6 +121,43 @@ def get_bundled_binary(name: str) -> str:
     return name
 
 
+def get_resource_path(name: str) -> str:
+    """
+    Get path to a bundled data file (OAuth client, stylesheets).
+
+    Data files are not binaries: PyInstaller unpacks them under sys._MEIPASS,
+    not next to the executable, so get_bundled_binary's locations do not apply.
+    Loading these with a path relative to the source tree is the classic
+    "works in development, ships blank" bug.
+
+    Returns a path that may not exist; callers decide what a missing resource
+    means, since for some it is fatal and for others it is a default.
+    """
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', '')
+        possible_dirs = [
+            # The spec bundles data under a resources/ subdirectory to keep the
+            # bundle tidy, so that is checked before the unpack root. Getting
+            # this pair out of step is silent: the file is present in the app
+            # and the lookup simply never finds it.
+            os.path.join(meipass, 'resources') if meipass else '',
+            meipass,
+            os.path.join(os.path.dirname(sys.executable), 'resources'),
+            os.path.abspath(os.path.join(
+                os.path.dirname(sys.executable), '..', 'Resources')),
+        ]
+        for directory in possible_dirs:
+            if not directory:
+                continue
+            path = os.path.join(directory, name)
+            if os.path.exists(path):
+                return path
+
+    # Development: resources/ at the repo root, three levels up from here.
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    return os.path.join(root, 'resources', name)
+
+
 def get_supported_extensions() -> list:
     """Return list of supported audio/video file extensions."""
     return [
@@ -148,7 +185,33 @@ def get_file_info(filepath: str) -> dict:
     """
     Get media file information using ffprobe.
     Returns dict with format, duration, codec info.
+
+    Memoised, because this spawns a subprocess and the intake screen asks it
+    for the same files repeatedly while somebody types a trip name. Keyed on
+    the path together with its size and modification time, so a file replaced
+    on disk is read again rather than answered from a stale entry.
     """
+    try:
+        stat = os.stat(filepath)
+        key = (filepath, stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        # Unreadable now, and possibly readable in a moment. Do not cache that.
+        return _probe(filepath)
+
+    cached = _FILE_INFO.get(key)
+    if cached is None:
+        cached = _probe(filepath)
+        _FILE_INFO[key] = cached
+    return dict(cached)
+
+
+# Small on purpose: a trip is a handful of recordings, and an unbounded cache
+# keyed on mtime would grow for the life of the process.
+_FILE_INFO = {}
+
+
+def _probe(filepath: str) -> dict:
+    """One ffprobe call. Everything above this is caching."""
     info = {
         'format': 'Unknown',
         'duration': 0,

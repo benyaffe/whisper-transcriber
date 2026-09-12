@@ -1,0 +1,246 @@
+"""
+Running one write-up step off the GUI thread.
+
+The write-up is a sequence with people in the middle of it, so unlike the
+transcription worker this does not run the whole job. It runs exactly one step
+and stops, and the window decides what happens next. That keeps the waiting
+and the asking in the same place rather than spread between a thread and a
+screen.
+
+Steps that need no network are not here at all. Applying corrections is
+deterministic string work over a few hundred segments and finishes faster than
+starting a thread would, so the window calls it directly.
+
+**Every failure arrives as a message somebody can act on.** A stack trace in a
+status pane tells a non-technical colleague nothing, and the one failure most
+likely to happen in normal use, an expired sign-in, is routine rather than
+alarming: these credentials last a day or two because of the org's session
+policy.
+"""
+
+from PyQt6.QtCore import QThread, pyqtSignal
+
+from src.podcastnotes.llm.agent import Cancelled
+
+# What a step is called on the screen while it runs. Present tense, because it
+# is describing what is happening rather than what was asked for.
+LABELS = {
+    "context": "Reading the background for this trip",
+    "speakers": "Working out who is speaking",
+    "questions": "Looking for anything still unresolved",
+    "answers": "Applying your answers",
+    "write": "Writing the transcript and the summary",
+    "revise": "Looking into what you said, then writing it again",
+}
+
+# One or two words for the heading, so the screen says where in the job it is
+# rather than standing on "Writing this up" for a quarter of an hour. "This" is
+# nothing anybody can point at, and the same three words through five different
+# stages reads as an app that has stopped.
+# Roughly how long each step takes, in seconds, measured on the real Ashford
+# trip: three recordings, forty-two minutes of audio, a map of eighteen people.
+#
+# An estimate, and labelled as one on screen. The context stage is an agentic
+# loop that genuinely cannot predict its own length, so this is the shape of a
+# typical run rather than a prediction about this one. It exists because a bar
+# that never moves for six minutes reads as a hang, and because "about four
+# minutes left" is a more useful thing to know than nothing.
+TYPICAL_SECONDS = {
+    "context": 360,
+    "speakers": 40,
+    "questions": 40,
+    "answers": 60,
+    "write": 420,
+    # The research is seeded by a sentence and a map that already exists, so it
+    # branches far less than the cold pass, and the rewrite is the same 420.
+    "revise": 540,
+}
+
+PHASES = {
+    "context": "Background",
+    "speakers": "Speakers",
+    "questions": "Questions",
+    "answers": "Questions",
+    "write": "Writing",
+    "revise": "Rewriting",
+}
+
+
+class WriteUpWorker(QThread):
+    """One step of a write-up, on a background thread."""
+
+    progress = pyqtSignal(str)      # a line for the status pane
+    found = pyqtSignal(str)         # something learned, for the running list
+    fraction = pyqtSignal(float)    # 0..1, an estimate and shown as one
+    completed = pyqtSignal(object)  # whatever the step produced
+    failed = pyqtSignal(str)        # already phrased for a person
+    cancelled = pyqtSignal()        # asked to stop, and it has
+
+    def __init__(self, writeup, step: str, answers: dict = None, library_path: str = "",
+                 notes: str = "", parent=None):
+        super().__init__(parent)
+        # Not `self.run`: QThread's own entry point is a method called run, and
+        # holding the write-up under that name shadows it, so the thread starts
+        # and immediately does nothing.
+        self.writeup = writeup
+        self.step = step
+        self.answers = answers or {}
+        self.library_path = library_path
+        self.notes = notes
+        self._searches = 0
+        self._started = 0.0
+        self._ticker = None
+        self._cancelled = False
+
+    @property
+    def label(self) -> str:
+        return LABELS.get(self.step, "Working")
+
+    @property
+    def phase(self) -> str:
+        """The heading: where in the job this is, in a word or two."""
+        return PHASES.get(self.step, "Working")
+
+    @property
+    def typical_seconds(self) -> int:
+        return TYPICAL_SECONDS.get(self.step, 120)
+
+    def elapsed_fraction(self) -> float:
+        """How far along a typical run of this step would be by now.
+
+        Capped just short of full, because arriving at 100% and then continuing
+        is worse than never claiming to know: it turns an estimate that was
+        merely wrong into one that is visibly lying.
+        """
+        import time
+
+        if not self._started:
+            return 0.0
+        return min((time.monotonic() - self._started) / self.typical_seconds, 0.97)
+
+    def cancel(self):
+        """Ask the step to stop. Best effort, and honest about which.
+
+        A research step stops within a second, because it calls back on every
+        search. A writing step cannot: it is one Claude call of several
+        minutes, and there is no way to interrupt it that does not leave a
+        half-written document. So the flag is also checked when the step
+        returns, and the result is thrown away rather than advancing the run.
+        """
+        self._cancelled = True
+
+    @property
+    def stops_promptly(self) -> bool:
+        """Whether cancelling this step takes effect in seconds or in minutes."""
+        return self.step in ("context", "revise")
+
+    def run(self):
+        import time
+
+        self._started = time.monotonic()
+        try:
+            result = self._do()
+        except Cancelled:
+            self.cancelled.emit()
+            return
+        except Exception as e:
+            self.failed.emit(explain(e))
+            return
+        if self._cancelled:
+            # It finished before the stop reached it. Emitting the result
+            # anyway would carry the run on to the next step, which is the one
+            # thing the person just said they did not want.
+            self.cancelled.emit()
+            return
+        self.completed.emit(result)
+
+    def _do(self):
+        if self.step == "context":
+            return self.writeup.build_context(on_search=self._searched)
+        if self.step == "speakers":
+            return self.writeup.speaker_suggestions(library_path=self.library_path)
+        if self.step == "questions":
+            return self.writeup.next_questions()
+        if self.step == "answers":
+            return self.writeup.answer(self.answers)
+        if self.step == "write":
+            return self.writeup.write_documents()
+        if self.step == "revise":
+            # Both halves on one thread, because the merge between them leaves
+            # the map ahead of the documents. Handing back in between would put
+            # a change log from a newer map beside the older pair on screen.
+            found = self.writeup.revise(self.notes, on_search=self._searched)
+            return found, self.writeup.write_documents()
+        raise ValueError(f"There is no write-up step called {self.step!r}.")
+
+    def _searched(self, query: str, found=None):
+        """Say what is happening now, not what happened last.
+
+        Reporting only the start of each search leaves the line sitting on a
+        finished lookup while Claude reads what came back, which takes up to a
+        minute at this effort level and reads as a hang. Watched happening on
+        a real run.
+        """
+        # The one place a long step reliably hands control back, so it is
+        # where a stop request is noticed.
+        if self._cancelled:
+            raise Cancelled("stopped by the person running it")
+        self._searches += 1
+        if found is None:
+            self.progress.emit(f"Looking up: {query}")
+        else:
+            self.progress.emit(
+                f"Reading {found} result{'s' if found != 1 else ''} for “{query}”, "
+                f"{self._searches // 2} searches so far"
+            )
+            self.found.emit(f"Searched for {query}")
+
+
+def explain(error: Exception) -> str:
+    """Turn an exception into something a colleague can act on.
+
+    Deliberately not a stack trace and deliberately not "an error occurred".
+    Each of these is a real thing that happens in ordinary use, and each has a
+    different next move.
+    """
+    from src.podcastnotes.context import GleanUnavailable
+    from src.podcastnotes.llm import agent, client
+
+    if isinstance(error, GleanUnavailable):
+        return (
+            "Could not reach your company's knowledge search, so the write-up has "
+            "stopped rather than guessing at names.\n\n"
+            "Check the connection on the setup screen and start the write-up again. "
+            "The transcript is finished and saved either way."
+        )
+    if isinstance(error, client.NotSignedIn):
+        return (
+            "Your Google sign-in has expired, which happens every day or two.\n\n"
+            "Sign in again on the setup screen and start the write-up again."
+        )
+    if isinstance(error, client.NoProjectChosen):
+        return "No Google Cloud project is chosen yet. Pick one on the setup screen."
+    if isinstance(error, client.ClaudeNotEnabled):
+        return (
+            f"Claude is not enabled in the project {error.project}.\n\n"
+            f"Enable it once here: {error.url}"
+        )
+    if isinstance(error, client.UnsupportedRegion):
+        return (
+            f"The region {error.region} does not carry the model this app uses. "
+            f"Change it to global on the setup screen."
+        )
+    from src.podcastnotes.pipeline import RevisionsExhausted
+
+    if isinstance(error, RevisionsExhausted):
+        return (
+            "This write-up has been rewritten five times.\n\n"
+            "Whatever is still wrong needs a person rather than another pass. "
+            "The documents are still here: save them and edit from there."
+        )
+    if isinstance(error, agent.Refused):
+        return (
+            "Claude declined to work on this recording, so no document was written. "
+            "Nothing has been changed or published."
+        )
+    return f"The write-up could not finish: {error}"

@@ -1,5 +1,5 @@
 """
-Pytest configuration for Whisper Transcriber tests.
+Pytest configuration for PodcastNotesWT tests.
 """
 
 import sys
@@ -70,7 +70,9 @@ def scoped_settings(tmp_path, monkeypatch):
     """Redirect src.core.config at a throwaway ini file.
 
     Otherwise these tests read and write the developer's real preferences at
-    ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist, and
+    ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist, which
+    keeps the app's old name deliberately: changing it would orphan the settings
+    of everybody who already has it installed. Also
     a failure mid-test leaves the setting flipped.
 
     QSettings.setPath cannot be used for this: on macOS it has no effect on
@@ -236,3 +238,46 @@ def patched_diarization(fake_pipeline, monkeypatch):
     )
 
     yield fake_pipeline
+
+
+@pytest.fixture(autouse=True)
+def no_cached_glean_token():
+    """Start every test with no access token remembered.
+
+    `glean_auth` caches one for two minutes so that a fan-out of parallel
+    searches shares a single refresh. Module-level state outlives a test, so
+    without this a test that populates it makes a later test that expects no
+    network quietly pass by using the leftover.
+    """
+    from src.podcastnotes import glean_auth
+
+    glean_auth.forget_access_token()
+    yield
+    glean_auth.forget_access_token()
+
+
+@pytest.fixture(autouse=True)
+def no_blocking_dialogs(monkeypatch):
+    """No test may open a modal nobody can click.
+
+    An offscreen run has no way to dismiss one, so a `QMessageBox.question` that
+    reaches Qt does not fail the test, it hangs the whole suite until somebody
+    notices. That happened the moment `closeEvent` learned to ask before
+    quitting mid-run: two unrelated fixtures blocked in teardown.
+
+    Cancel rather than Ok, so an unguarded prompt takes the path that changes
+    nothing. A test that means to answer one patches it itself, which then
+    wins, because a later `setattr` replaces this.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    for name, answer in (
+        ("question", QMessageBox.StandardButton.Cancel),
+        ("warning", QMessageBox.StandardButton.Cancel),
+        ("information", QMessageBox.StandardButton.Ok),
+        ("critical", QMessageBox.StandardButton.Ok),
+    ):
+        monkeypatch.setattr(
+            QMessageBox, name, staticmethod(lambda *a, _a=answer, **k: _a)
+        )
+    yield

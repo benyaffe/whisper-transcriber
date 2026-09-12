@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for Whisper Transcriber
+PyInstaller spec file for PodcastNotesWT
 """
 
 import os
@@ -50,6 +50,22 @@ datas = [
     # unpacked into the bundle and not just baked into Info.plist.
     (os.path.join(project_dir, 'VERSION'), '.'),
 ]
+
+# The Google OAuth client, which is what lets people sign in from inside the
+# app rather than installing gcloud. Optional at build time on purpose: the
+# app reports "sign-in has not been set up" rather than failing to start, so a
+# build without it still produces a working transcriber.
+#
+# For an installed application Google does not treat the "client secret" as
+# confidential. It ships inside every desktop app that does browser sign-in,
+# and the security comes from the loopback redirect and PKCE.
+google_oauth_client = os.path.join(resources_dir, 'google_oauth_client.json')
+if os.path.exists(google_oauth_client):
+    datas.append((google_oauth_client, 'resources'))
+else:
+    print('NOTE: resources/google_oauth_client.json is absent. '
+          'The bundle will build, and Google sign-in will report itself as '
+          'not set up.')
 
 # Add faster_whisper assets (silero VAD model)
 if fw_assets_dir and os.path.exists(fw_assets_dir):
@@ -156,7 +172,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Whisper Transcriber',
+    name='PodcastNotesWT',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -177,17 +193,17 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Whisper Transcriber',
+    name='PodcastNotesWT',
 )
 
 app = BUNDLE(
     coll,
-    name='Whisper Transcriber.app',
+    name='PodcastNotesWT.app',
     icon=os.path.join(resources_dir, 'icon.icns'),
-    bundle_identifier='com.whispertranscriber.app',
+    bundle_identifier='com.podcastnoteswt.app',
     info_plist={
-        'CFBundleName': 'Whisper Transcriber',
-        'CFBundleDisplayName': 'Whisper Transcriber',
+        'CFBundleName': 'PodcastNotesWT',
+        'CFBundleDisplayName': 'PodcastNotesWT',
         'CFBundleVersion': APP_VERSION,
         'CFBundleShortVersionString': APP_VERSION,
         'NSHighResolutionCapable': True,

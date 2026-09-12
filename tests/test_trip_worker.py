@@ -321,3 +321,44 @@ def test_cancelling_stops_between_stages(recordings, monkeypatch):
 
     assert worker._run_trip() is None
     assert seen["runner_kwargs"] is None, "transcription started despite cancellation"
+
+
+# --- how long is left ----------------------------------------------------------
+
+
+def test_the_estimate_is_in_whole_minutes():
+    """The estimate comes from throughput measured so far and swings by a
+    minute between updates, so seconds claim a precision it does not have and
+    watching them jump reads as the app changing its mind twice a second."""
+    from src.ui.podcastnotes.trip_worker import remaining
+
+    assert remaining(785) == "Transcribing, about 14 minutes left"
+    assert "s left" not in remaining(785).replace("minutes left", "")
+
+
+def test_the_last_stretch_does_not_count_down_from_fifty_nine():
+    from src.ui.podcastnotes.trip_worker import remaining
+
+    assert remaining(40) == "Transcribing, less than a minute left"
+
+
+def test_one_minute_is_singular():
+    from src.ui.podcastnotes.trip_worker import remaining
+
+    assert remaining(60) == "Transcribing, about 1 minute left"
+
+
+def test_it_rounds_up_so_it_never_stalls_on_one_minute():
+    """Rounding down means saying "1 minute left" and then running for another
+    two, which is the one thing an estimate must not do."""
+    from src.ui.podcastnotes.trip_worker import remaining
+
+    assert remaining(61) == "Transcribing, about 2 minutes left"
+    assert remaining(119) == "Transcribing, about 2 minutes left"
+
+
+def test_no_estimate_yet_just_says_what_it_is_doing():
+    from src.ui.podcastnotes.trip_worker import remaining
+
+    assert remaining(0) == "Transcribing"
+    assert remaining(-1) == "Transcribing"

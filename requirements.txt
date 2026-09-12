@@ -28,6 +28,27 @@ PyQt6>=6.6.0
 # Secure token storage
 keyring>=24.0.0
 
+# Claude, on whichever Vertex project the user is billed to.
+# The [vertex] extra pulls in google-auth, which is what lets AnthropicVertex
+# take an explicit credentials object. That is what removes the gcloud
+# dependency: nobody installs a 500MB SDK or opens a Terminal.
+# Deliberately NOT google-cloud-aiplatform. It is unnecessary here and is the
+# one dependency in this space with a real conflict risk.
+anthropic[vertex]>=1.5.0
+
+# Signing in to Google from inside the app, and publishing to Drive.
+# google-auth arrives with anthropic[vertex] anyway, but it is listed because
+# auth.py imports google.oauth2 and google.auth.transport directly, and a
+# direct import should not depend on somebody else's transitive dependency.
+google-auth>=2.58.0
+google-auth-oauthlib>=1.4.0
+google-api-python-client>=2.200.0
+
+# Company context. Permission-aware and user-scoped: each colleague's own
+# credential, never a shared one, so one person's trip cannot surface
+# documents another person cannot open.
+glean-api-client>=0.17.0
+
 # System monitoring
 psutil>=5.9.0
 

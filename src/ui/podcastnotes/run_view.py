@@ -12,6 +12,7 @@ import subprocess
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from src.ui.theme import role
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget,
 )
@@ -39,7 +40,7 @@ class RunView(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
 
         self.title = QLabel("")
-        self.title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        role(self.title, "h2")
         layout.addWidget(self.title)
 
         progress_row = QHBoxLayout()

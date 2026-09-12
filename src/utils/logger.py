@@ -1,5 +1,5 @@
 """
-Logging utility for Whisper Transcriber.
+Logging utility for PodcastNotesWT.
 Provides file-based logging for debugging and error reporting.
 """
 
@@ -60,7 +60,7 @@ def setup_logging(enable_file_logging: bool = True) -> logging.Logger:
 
             # Log startup
             logger.debug("=" * 60)
-            logger.debug(f"Whisper Transcriber started at {datetime.now().isoformat()}")
+            logger.debug(f"PodcastNotesWT started at {datetime.now().isoformat()}")
             logger.debug(f"Python {sys.version}")
             logger.debug(f"Log file: {LOG_FILE}")
             logger.debug("=" * 60)
@@ -105,7 +105,7 @@ def get_debug_info() -> str:
     import platform
 
     info_lines = [
-        "=== Whisper Transcriber Debug Info ===",
+        "=== PodcastNotesWT Debug Info ===",
         f"Date: {datetime.now().isoformat()}",
         f"OS: {platform.system()} {platform.release()}",
         f"Python: {sys.version}",

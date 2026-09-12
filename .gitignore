@@ -43,3 +43,6 @@ models/
 # Temporary files
 *.tmp
 *.temp
+
+# Stage B quality spike (throwaway, not shipped)
+spike/

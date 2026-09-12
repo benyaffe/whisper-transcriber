@@ -209,10 +209,18 @@ class TestSettings:
     the one under test, so it asserted nothing about nothing.
     """
 
-    def test_speaker_id_defaults_to_disabled(self, scoped_settings):
+    def test_speaker_id_defaults_to_enabled(self, scoped_settings):
+        """Changed from disabled after a cold-start rehearsal.
+
+        The intake screen's "Name the speakers" box has always been ticked by
+        default, and this value disagreed with it. The setup checklist reads
+        this one, so a new machine got an all-green list saying speaker naming
+        was off and then a trip screen that refused to start without a
+        HuggingFace token. See src/core/config.py for the full account.
+        """
         from src.core.config import is_speaker_id_enabled
 
-        assert is_speaker_id_enabled() is False
+        assert is_speaker_id_enabled() is True
 
     def test_toggle_speaker_id_round_trips(self, scoped_settings):
         from src.core.config import is_speaker_id_enabled, set_speaker_id_enabled
@@ -236,7 +244,7 @@ class TestSettings:
         The org/app pair resolves to
         ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist,
         where every existing install already has its setting. main.py sets the
-        application name to "Whisper Transcriber" WITH A SPACE, so switching to
+        application name to "PodcastNotesWT", so switching to
         a default-constructed QSettings() would silently read a different file
         and reset everyone's preference.
         """
@@ -422,7 +430,7 @@ class TestRobustness:
         logger = get_logger()
         assert logger is not None
         info = get_debug_info()
-        assert "Whisper Transcriber Debug Info" in info
+        assert "PodcastNotesWT Debug Info" in info
 
 
 # =============================================================================
@@ -451,3 +459,82 @@ class TestIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+# =============================================================================
+# Memory check calibration
+# =============================================================================
+
+class TestMemoryCheck:
+    """The figures used to be for fp32 openai-whisper while the app runs
+    faster-whisper at int8, so the check warned people off runs that were never
+    going to be a problem. A false alarm here tells somebody to close their
+    apps or pick a worse model before a job that would have finished."""
+
+    def _at(self, available_gb, monkeypatch):
+        import psutil
+
+        class Mem:
+            available = int(available_gb * 1024 ** 3)
+
+        monkeypatch.setattr(psutil, "virtual_memory", lambda: Mem())
+
+    def test_the_real_run_that_warned_would_now_pass(self, monkeypatch):
+        """4.8 GB free, medium, 42 minutes, speaker ID on. It warned, and then
+        finished, diarization included.
+
+        A "memory is tight" note is still fine and is shown as a status line.
+        What must not happen is the warning telling somebody to close their
+        apps or choose a worse model."""
+        from src.core.runner import check_memory_available
+
+        self._at(4.8, monkeypatch)
+        ok, message = check_memory_available("medium", 42, speaker_id=True)
+
+        assert ok is True
+        assert "Low memory" not in message
+
+
+    def test_plenty_of_memory_says_nothing_at_all(self, monkeypatch):
+        from src.core.runner import check_memory_available
+
+        self._at(16.0, monkeypatch)
+
+        assert check_memory_available("medium", 42, speaker_id=True) == (True, "")
+
+    def test_the_figures_match_what_was_measured(self):
+        """medium peaked at 2.02 GB during inference on 2026-09-11."""
+        from src.core.runner import MODEL_MEMORY_REQUIREMENTS
+
+        assert 1.8 <= MODEL_MEMORY_REQUIREMENTS["medium"] <= 2.5
+        assert MODEL_MEMORY_REQUIREMENTS["large"] > MODEL_MEMORY_REQUIREMENTS["medium"]
+        assert MODEL_MEMORY_REQUIREMENTS["tiny"] < MODEL_MEMORY_REQUIREMENTS["small"]
+
+    def test_speaker_id_off_does_not_ask_for_its_memory(self, monkeypatch):
+        """Somebody transcribing a solo lecture should not be warned about a
+        stage they turned off."""
+        from src.core.runner import check_memory_available
+
+        self._at(2.6, monkeypatch)
+
+        assert check_memory_available("medium", 10, speaker_id=False)[0] is True
+        assert check_memory_available("medium", 10, speaker_id=True)[0] is False
+
+    def test_a_genuinely_short_machine_is_still_warned(self, monkeypatch):
+        """Recalibrating must not turn the check off."""
+        from src.core.runner import check_memory_available
+
+        self._at(0.4, monkeypatch)
+        ok, message = check_memory_available("medium", 42, speaker_id=True)
+
+        assert ok is False
+        assert "Low memory" in message
+
+    def test_a_tight_machine_gets_a_note_rather_than_a_warning(self, monkeypatch):
+        from src.core.runner import check_memory_available
+
+        self._at(5.0, monkeypatch)
+        ok, message = check_memory_available("medium", 42, speaker_id=True)
+
+        assert ok is True
+        assert "tight" in message

@@ -160,7 +160,22 @@ def compute_boundaries(paths: list[str]) -> list[Boundary]:
 
 
 def write_boundaries(result: ConcatResult, out_dir: str) -> str:
-    """Persist the seam record beside the joined audio."""
+    """Persist the seam record beside the joined audio.
+
+    This is what makes the running order recoverable later. The recordings are
+    joined in whatever order they were added, because the person adding them
+    should not have to know, and because diarization wants one continuous file
+    so a speaker keeps the same identity throughout.
+
+    Each source's span in the combined audio is recorded here, so once there
+    is a transcript it can be cut back into per-recording pieces and those
+    pieces put in the right order by reading what was said. The audio is never
+    rejoined; only the write-up is arranged.
+
+    File timestamps are not a shortcut for this. On the Ashford recordings all
+    three report a creation time within four seconds of each other, because
+    that is when they were copied off the device.
+    """
     path = os.path.join(out_dir, BOUNDARIES_FILENAME)
     payload = {
         "version": 1,

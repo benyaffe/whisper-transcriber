@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Whisper Transcription GUI
-Transcribe audio/video files to VTT/TXT using faster-whisper
+PodcastNotesWT
+
+Takes the recordings from a trip and turns them into a transcript and, in
+time, the write-up. A single recording is a trip of one.
 """
 
 import sys
@@ -13,6 +15,7 @@ import atexit
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
+from src.ui import theme
 from src.ui.main_window import MainWindow
 
 
@@ -58,7 +61,7 @@ def cleanup_and_exit(*args):
     os._exit(0)
 
 
-class WhisperApp(QApplication):
+class PodcastNotesApp(QApplication):
     """Custom QApplication that raises window on activation (Cmd+Tab)."""
 
     def __init__(self, argv):
@@ -94,7 +97,7 @@ def main():
 
     # Prevent multiple instances
     if not acquire_single_instance_lock():
-        print("Whisper Transcriber is already running.")
+        print("PodcastNotesWT is already running.")
         sys.exit(0)
 
     # Register cleanup handlers to prevent respawn
@@ -107,8 +110,13 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
-    app = WhisperApp(sys.argv)
-    app.setApplicationName("Whisper Transcriber")
+    app = PodcastNotesApp(sys.argv)
+    app.setApplicationName("PodcastNotesWT")
+    theme.apply(app)
+    # The app's old name, kept on purpose. Qt derives the settings and
+    # preferences paths from this, so renaming it would silently orphan the
+    # Google project, region and HuggingFace token of everybody who already
+    # has it installed.
     app.setOrganizationName("WhisperTranscriber")
 
     # Ensure app quits when window is closed (prevent respawn)
@@ -123,6 +131,11 @@ def main():
     window = MainWindow()
     app.main_window = window  # For Cmd+Tab window raising
     window.show()
+
+    # Verify the connections in the background. Opens on the checklist if this
+    # machine has never had them all working, and switches to it later only if
+    # something has broken since.
+    window.check_setup_on_launch()
 
     # Files passed on the command line, which is how macOS delivers a drag
     # onto the app icon at launch. They become the recordings of a new trip.

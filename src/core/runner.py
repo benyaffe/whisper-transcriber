@@ -36,13 +36,29 @@ from src.utils.file_utils import extract_audio, generate_output_paths, get_file_
 from src.utils.logger import get_logger, log_exception
 
 # Memory requirements per model (approximate, in GB)
+# Peak resident memory per model, in GB, for the stack this app actually runs:
+# faster-whisper at int8 on CPU. The numbers here used to be the figures for
+# fp32 openai-whisper, which is a different implementation using roughly two
+# and a half times as much, so the check warned people off runs that were
+# never going to be a problem.
+#
+# Measured for medium on 2026-09-11: 1.75 GB with the weights loaded, 2.02 GB
+# peak during inference. The others are scaled from it by parameter count
+# (39M, 74M, 244M, 769M, 1550M), because int8 is about a byte a parameter plus
+# a fairly constant working set.
 MODEL_MEMORY_REQUIREMENTS = {
-    "tiny": 1.0,
-    "base": 1.5,
-    "small": 2.5,
-    "medium": 5.0,
-    "large": 10.0,
+    "tiny": 0.5,
+    "base": 0.7,
+    "small": 1.1,
+    "medium": 2.1,
+    "large": 3.8,
 }
+
+# What speaker identification adds on top. Separate because it is optional and
+# because it is a second model: leaving it in the figures above would warn
+# somebody transcribing a solo lecture about memory for a stage they turned
+# off.
+DIARIZATION_MEMORY_GB = 1.5
 
 # Language code mapping
 LANGUAGE_CODES = {
@@ -57,10 +73,19 @@ LANGUAGE_CODES = {
 }
 
 
-def check_memory_available(model_size: str, file_duration_minutes: float) -> tuple[bool, str]:
-    """
-    Check if sufficient memory is available for transcription.
-    Returns (is_ok, warning_message).
+def check_memory_available(
+    model_size: str,
+    file_duration_minutes: float,
+    speaker_id: bool = False,
+) -> tuple[bool, str]:
+    """Whether there is room to run, and what to say if it is close.
+
+    Returns (is_ok, warning_message). An empty message means nothing to say.
+
+    A false alarm here is not harmless: it tells somebody to close their apps
+    or pick a worse model before a job that would have finished. That happened
+    on a real 42-minute trip, which warned at 4.8 GB available against 5.4 GB
+    "needed" and then completed, diarization included.
     """
     import psutil
 
@@ -68,8 +93,10 @@ def check_memory_available(model_size: str, file_duration_minutes: float) -> tup
         mem = psutil.virtual_memory()
         available_gb = mem.available / (1024 ** 3)
 
-        required_gb = MODEL_MEMORY_REQUIREMENTS.get(model_size, 5.0)
-        # Add buffer for audio processing (roughly 0.1GB per 10 minutes)
+        required_gb = MODEL_MEMORY_REQUIREMENTS.get(model_size, 2.1)
+        if speaker_id:
+            required_gb += DIARIZATION_MEMORY_GB
+        # Audio processing, roughly 0.1GB per 10 minutes.
         required_gb += file_duration_minutes * 0.01
 
         if available_gb < required_gb:
@@ -325,7 +352,9 @@ class TranscriptionRunner:
         # Step 2.5: Memory check
         info = get_file_info(self.audio_path)
         duration_minutes = info.get('duration', 0) / 60
-        mem_ok, mem_warning = check_memory_available(self.model_size, duration_minutes)
+        mem_ok, mem_warning = check_memory_available(
+            self.model_size, duration_minutes, speaker_id=self.enable_speaker_id
+        )
         if not mem_ok:
             obs.quality_warning(mem_warning)
             self._logger.warning(f"Memory warning: {mem_warning}")
