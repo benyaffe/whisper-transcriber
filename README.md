@@ -9,8 +9,8 @@ misheard terms fixed, and a summary written for somebody who was not there. It s
 asks you three times along the way, for about a minute in total.
 
 The point of it is the correcting. A machine transcript of a real conversation is full of
-names and jargon the recogniser has never met: "Ridgelane Northgate" for Ridgeline Health Northgate
-Westvale, "Kestler" for a department chair called Kessler. The app looks those up in your
+names and jargon the recogniser has never met: "Ridgelane Northgate" for Ridgeline Health
+Northgate Westvale, "Kestler" for a department chair called Kessler. The app looks those up in your
 company's own knowledge search, so the corrections come from documents rather than from a
 guess, and anything it could not settle is left visibly marked rather than quietly
 invented.
