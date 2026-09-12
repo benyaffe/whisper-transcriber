@@ -26,9 +26,8 @@ To see what is on this Mac:
 security find-identity -v -p codesigning
 ```
 
-As of 11 September 2026 that returns one identity, `Apple Development:
-Benjamin Yaffe`, which is the wrong kind. Nothing in the build can work around
-that; the certificate has to exist.
+If the only line back says `Apple Development`, that is the wrong kind, and
+nothing in the build can work around it: the certificate has to exist.
 
 ## Getting a Developer ID Application certificate
 
@@ -74,13 +73,15 @@ ticket. It needs three things.
 
 ```bash
 xcrun notarytool store-credentials podcastnotes \
-    --apple-id ben.yaffe@example.com \
+    --apple-id you@example.com \
     --team-id YOURTEAMID \
     --password abcd-efgh-ijkl-mnop
 ```
 
-Use your real address. The profile has to be called `podcastnotes`, or set
-`NOTARY_PROFILE` to whatever you called it.
+Use the Apple ID the membership is under. The profile has to be called
+`podcastnotes`, or set `NOTARY_PROFILE` to whatever you called it. Leave
+`--password` off and it prompts, which keeps the password out of your shell
+history.
 
 ## Then
 
