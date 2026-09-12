@@ -34,10 +34,10 @@ else
     echo "⚠ Warning: FFmpeg may not be bundled correctly"
 fi
 
-# Sign the app before it goes into the DMG, so the DMG carries a signed app.
-# A no-op with a clear message when there is no Developer ID certificate, and
-# an unsigned build is still a working build.
-scripts/sign_and_notarize.sh "dist/PodcastNotesWT.app"
+# Sign, notarize and staple the app before the DMG is built around it, so the
+# DMG carries a stapled app. A no-op with a clear message when there is no
+# Developer ID certificate, and an unsigned build is still a working build.
+scripts/sign_and_notarize.sh --app "dist/PodcastNotesWT.app"
 
 # Create styled DMG
 echo "Creating DMG..."
@@ -58,8 +58,10 @@ create-dmg \
     "$DMG_NAME" \
     "dist/PodcastNotesWT.app"
 
-# And again for the DMG itself, which is the thing that actually gets sent.
-scripts/sign_and_notarize.sh "dist/PodcastNotesWT.app" "$DMG_NAME"
+# And the DMG itself, which is the thing that actually gets sent. Separately,
+# because re-signing the app at this point would throw away the ticket that
+# was just stapled to it.
+scripts/sign_and_notarize.sh --dmg "$DMG_NAME"
 
 echo ""
 echo "=== Build Complete ==="

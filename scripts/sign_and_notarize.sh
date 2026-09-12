@@ -1,7 +1,5 @@
 #!/bin/bash
-# Sign the app and DMG, then have Apple notarize them.
-#
-# Called by build.sh, and safe to run on its own against an existing build.
+# Sign, notarize and staple. Called twice by build.sh, once for each artefact.
 #
 # **It is a no-op without a Developer ID Application certificate**, and says so
 # rather than failing. An unsigned build is still a working build; it just
@@ -10,32 +8,34 @@
 #
 # Two certificates get confused here, so to be explicit:
 #
-#   Apple Development      runs on your own registered Macs. Cannot notarize.
+#   Apple Development          runs on your own registered Macs. Cannot notarize.
 #   Developer ID Application   distributes to anybody. This is the one.
 #
-# Having the first and not the second is the normal situation for somebody who
-# has only ever built for themselves, and it is not something you can fix by
-# trying harder: the second is issued to the Apple Developer Program account
-# holder.
-#
 # Usage:
-#   scripts/sign_and_notarize.sh <path-to.app> [path-to.dmg]
+#   scripts/sign_and_notarize.sh --app dist/PodcastNotesWT.app
+#   scripts/sign_and_notarize.sh --dmg PodcastNotesWT-1.1.0.dmg
+#
+# **The order matters and the modes are separate for a reason.** The app is
+# signed, notarized and stapled first, then the DMG is built around the
+# stapled app, then the DMG is signed and notarized in turn. Re-signing an app
+# after it has been stapled throws the ticket away, which is what a single
+# do-everything mode kept doing.
 #
 # Set up once, before the first run:
 #   xcrun notarytool store-credentials podcastnotes \
-#       --apple-id you@example.com \
-#       --team-id YOURTEAMID \
-#       --password <app-specific-password-from-appleid.apple.com>
+#       --apple-id you@example.com --team-id YOURTEAMID
+#   (it prompts for an app-specific password from account.apple.com)
 
 set -euo pipefail
 
-APP="${1:?usage: sign_and_notarize.sh <path-to.app> [path-to.dmg]}"
-DMG="${2:-}"
+MODE="${1:?usage: sign_and_notarize.sh --app <path.app> | --dmg <path.dmg>}"
+TARGET="${2:?usage: sign_and_notarize.sh --app <path.app> | --dmg <path.dmg>}"
 PROFILE="${NOTARY_PROFILE:-podcastnotes}"
 ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/resources/entitlements.plist"
 
-# The identity is matched by prefix, so the team suffix does not have to be
-# spelled out here and a renewed certificate keeps working.
+# Matched by prefix, so the team suffix does not have to be spelled out here
+# and a renewed certificate keeps working.
+#
 # `|| true` is load-bearing. Under `set -euo pipefail` a grep that matches
 # nothing fails the whole pipeline, so without it the script exits silently on
 # the one machine state it exists to explain: no certificate.
@@ -59,55 +59,74 @@ if [ -z "$IDENTITY" ]; then
     exit 0
 fi
 
-echo "Signing as: $IDENTITY"
+_have_credentials() {
+    xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1
+}
 
-# Deep, and every nested binary first. `--deep` alone is documented as
-# unreliable and Apple advises against it, so the dylibs and the frameworks are
-# signed from the inside out before the bundle itself.
-find "$APP" \( -name "*.dylib" -o -name "*.so" -o -perm +111 -type f \) -print0 \
-    | while IFS= read -r -d '' target; do
-        codesign --force --timestamp --options runtime \
-            --entitlements "$ENTITLEMENTS" \
-            --sign "$IDENTITY" "$target" 2>/dev/null || true
-    done
-
-codesign --force --timestamp --options runtime \
-    --entitlements "$ENTITLEMENTS" \
-    --sign "$IDENTITY" "$APP"
-
-# Checked before uploading, because a rejection here costs a second and a
-# rejection from Apple's service costs several minutes of waiting.
-codesign --verify --deep --strict --verbose=2 "$APP"
-
-if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+_no_credentials_note() {
     echo ""
     echo "⚠  Signed, but not notarized: no stored credentials for '$PROFILE'."
     echo "   Run the notarytool store-credentials command in docs/SIGNING.md."
     echo ""
-    exit 0
-fi
-
-_notarize() {
-    local target="$1"
-    echo "Notarizing $(basename "$target"). This usually takes a few minutes."
-    # --wait, because the alternative is a build that claims success while
-    # Apple is still deciding, and a stapled ticket is the whole point.
-    xcrun notarytool submit "$target" --keychain-profile "$PROFILE" --wait
-    xcrun stapler staple "$target"
 }
 
-# The app is notarized inside the DMG it ships in, so the DMG is what gets
-# submitted when there is one. Stapling both means the app still validates if
-# somebody copies it out of a DMG they no longer have.
-_notarize "$APP"
+case "$MODE" in
+--app)
+    echo "Signing $(basename "$TARGET") as: $IDENTITY"
 
-if [ -n "$DMG" ] && [ -f "$DMG" ]; then
-    codesign --force --timestamp --sign "$IDENTITY" "$DMG"
-    _notarize "$DMG"
-fi
+    # Every nested binary first, from the inside out. `--deep` alone is
+    # documented as unreliable and Apple advises against it.
+    find "$TARGET" \( -name "*.dylib" -o -name "*.so" -o -perm +111 -type f \) -print0 \
+        | while IFS= read -r -d '' nested; do
+            codesign --force --timestamp --options runtime \
+                --entitlements "$ENTITLEMENTS" \
+                --sign "$IDENTITY" "$nested" 2>/dev/null || true
+        done
+
+    codesign --force --timestamp --options runtime \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$IDENTITY" "$TARGET"
+
+    # Locally, before uploading: a rejection here costs a second and one from
+    # Apple's service costs several minutes of waiting.
+    codesign --verify --deep --strict "$TARGET"
+
+    if ! _have_credentials; then _no_credentials_note; exit 0; fi
+
+    # notarytool will not accept a .app. It takes a zip, a pkg or a dmg, so
+    # the bundle is zipped purely to be uploaded. `ditto`, not `zip`, because
+    # only ditto preserves the symlinks and resource forks inside a framework.
+    ZIP="$(dirname "$TARGET")/$(basename "$TARGET").zip"
+    ditto -c -k --keepParent "$TARGET" "$ZIP"
+    echo "Notarizing $(basename "$TARGET"). This usually takes a few minutes."
+    xcrun notarytool submit "$ZIP" --keychain-profile "$PROFILE" --wait
+    rm -f "$ZIP"
+
+    # The ticket is stapled to the bundle, not to the zip that carried it, so
+    # the app validates on a Mac that is offline when it first opens it.
+    xcrun stapler staple "$TARGET"
+    ;;
+
+--dmg)
+    echo "Signing $(basename "$TARGET") as: $IDENTITY"
+    codesign --force --timestamp --sign "$IDENTITY" "$TARGET"
+
+    if ! _have_credentials; then _no_credentials_note; exit 0; fi
+
+    echo "Notarizing $(basename "$TARGET"). This usually takes a few minutes."
+    xcrun notarytool submit "$TARGET" --keychain-profile "$PROFILE" --wait
+    xcrun stapler staple "$TARGET"
+    ;;
+
+*)
+    echo "unknown mode: $MODE (expected --app or --dmg)" >&2
+    exit 2
+    ;;
+esac
 
 echo ""
-echo "✓ Signed and notarized."
-# The check Gatekeeper itself makes, rather than a proxy for it. Anything that
-# passes here opens with a double click on a Mac that has never seen it.
-spctl --assess --type execute --verbose=2 "$APP" || true
+echo "✓ Signed, notarized and stapled: $(basename "$TARGET")"
+# The check Gatekeeper itself makes, rather than a proxy for it.
+if [ "$MODE" = "--app" ]; then
+    spctl --assess --type execute --verbose=2 "$TARGET" || true
+fi

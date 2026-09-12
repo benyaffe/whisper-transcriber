@@ -93,8 +93,18 @@ longer while Apple decides. To sign a build that already exists without
 rebuilding it:
 
 ```bash
-scripts/sign_and_notarize.sh dist/PodcastNotesWT.app PodcastNotesWT-1.1.0.dmg
+scripts/sign_and_notarize.sh --app dist/PodcastNotesWT.app
+scripts/sign_and_notarize.sh --dmg PodcastNotesWT-1.1.0.dmg
 ```
+
+Two calls, and the order matters. The app is notarized and stapled first, then
+the DMG is built around the stapled app, then the DMG is notarized in turn.
+Re-signing the app after stapling throws the ticket away.
+
+Expect the first notarization of a bundle this size to take around forty
+minutes. Apple scans every one of the five thousand binaries inside it. There
+is no web page for the status; `notarytool history` and an email to the Apple
+ID on the account are the only ways to watch it.
 
 ## Checking it actually worked
 
