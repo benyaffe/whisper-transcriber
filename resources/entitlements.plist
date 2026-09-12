@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the hardened runtime has to be told to allow.
+
+  Notarization requires the hardened runtime, and the hardened runtime kills a
+  PyInstaller app on launch unless these are granted. Each one is here for a
+  reason rather than copied from a template, because every entitlement is a
+  security check being switched off and an unnecessary one is a real cost.
+
+  There is deliberately no network entitlement and no file-access entitlement:
+  those belong to the App Sandbox, which this app does not use, and adding them
+  here would be cargo cult.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Python compiles bytecode and torch compiles kernels, both of which
+         write executable pages at runtime. Without this the app dies before
+         it draws a window. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- PyInstaller's bootloader sets DYLD_LIBRARY_PATH so the bundled
+         Python, Qt and torch dylibs are found. The hardened runtime strips
+         DYLD_* variables unless this says otherwise. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- The wheels in site-packages carry their own signatures from whoever
+         built them, and re-signing every one of several thousand dylibs is
+         neither possible nor useful. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Playing a speaker's clip on the naming screen reads the recording the
+         user chose. It does not record anything, and there is no microphone
+         entitlement here on purpose. -->
+    <key>com.apple.security.device.audio-input</key>
+    <false/>
+</dict>
+</plist>

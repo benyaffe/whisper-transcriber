@@ -81,8 +81,11 @@ that wants either opts in.
 The result is `dist/PodcastNotesWT.app` and a DMG named from `VERSION`. The build is
 driven entirely by `PodcastNotesWT.spec`.
 
-**It is not signed or notarized**, so the first launch needs a right-click and Open to get
-past Gatekeeper. That is the single most likely thing to stop somebody you hand it to.
+Signing and notarizing happen automatically if a **Developer ID Application** certificate is
+installed. Without one the build says so and carries on, and the result still works, but
+whoever you send it to gets a Gatekeeper dialog claiming the app is damaged. See
+[docs/SIGNING.md](docs/SIGNING.md), which covers getting the certificate and the difference
+between it and the Apple Development one that will not do.
 
 ## Telling the voices apart
 
@@ -114,11 +117,11 @@ The write-up uses Claude Opus 5 through Vertex AI, in the `global` region by def
 
 ## Where things live
 
-- `src/core/` — transcription, diarization, audio. No Qt, no Claude.
-- `src/podcastnotes/` — the write-up pipeline: context, correction, questions, output,
-  revision. No Qt.
-- `src/ui/` — the screens, and `theme.py`, which is the one place the app decides what it
+- `src/core/`: transcription, diarization, audio. No Qt, no Claude.
+- `src/podcastnotes/`: the write-up pipeline, meaning context, correction, questions,
+  output and revision. No Qt.
+- `src/ui/`: the screens, and `theme.py`, which is the one place the app decides what it
   looks like.
-- `spike/` — scripts that render every screen to a PNG and drive the app end to end. Run
+- `spike/`: scripts that render every screen to a PNG and drive the app end to end. Run
   `spike/render_all.py` before calling any interface work finished; the screens have
   produced several defects that a green suite did not.

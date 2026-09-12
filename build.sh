@@ -34,6 +34,11 @@ else
     echo "⚠ Warning: FFmpeg may not be bundled correctly"
 fi
 
+# Sign the app before it goes into the DMG, so the DMG carries a signed app.
+# A no-op with a clear message when there is no Developer ID certificate, and
+# an unsigned build is still a working build.
+scripts/sign_and_notarize.sh "dist/PodcastNotesWT.app"
+
 # Create styled DMG
 echo "Creating DMG..."
 VERSION=$(tr -d '[:space:]' < VERSION)
@@ -52,6 +57,9 @@ create-dmg \
     --app-drop-link 510 220 \
     "$DMG_NAME" \
     "dist/PodcastNotesWT.app"
+
+# And again for the DMG itself, which is the thing that actually gets sent.
+scripts/sign_and_notarize.sh "dist/PodcastNotesWT.app" "$DMG_NAME"
 
 echo ""
 echo "=== Build Complete ==="
