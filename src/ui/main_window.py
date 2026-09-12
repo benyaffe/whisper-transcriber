@@ -21,6 +21,7 @@ from src.ui.podcastnotes.run_view import RunView
 from src.ui.podcastnotes.setup_view import SetupView
 from src.ui.podcastnotes.trip_worker import TripWorker
 from src.ui.podcastnotes.writeup_view import WriteUpView
+from src.podcastnotes.concat import BOUNDARIES_FILENAME
 from src.ui.podcastnotes.writeup_worker import WriteUpWorker
 from src.utils.file_utils import check_ffmpeg_health
 from src.utils.logger import get_logger
@@ -102,6 +103,155 @@ class MainWindow(QMainWindow):
         settings_action = app_menu.addAction("Accounts...")
         settings_action.setShortcut("Cmd+,")
         settings_action.triggered.connect(self._open_settings)
+
+        trips = self.menuBar().addMenu("Trips")
+        self._recent_menu = trips.addMenu("Reopen")
+        self._recent_menu.aboutToShow.connect(self._fill_recent_menu)
+        open_action = trips.addAction("Open a trip folder...")
+        open_action.setShortcut("Cmd+O")
+        open_action.triggered.connect(self._open_trip_folder)
+
+    def _fill_recent_menu(self):
+        """Rebuilt each time it opens, because the folders are somebody's own.
+
+        A trip can be moved, renamed or deleted between one launch and the
+        next, and a menu built once at startup would keep offering it.
+        """
+        from src.podcastnotes import recents
+
+        self._recent_menu.clear()
+        found = recents.load()
+        if not found:
+            empty = self._recent_menu.addAction("Nothing yet")
+            empty.setEnabled(False)
+            return
+        for trip in found:
+            label = trip["name"] if trip["readable"] else f"{trip['name']} (damaged)"
+            action = self._recent_menu.addAction(label)
+            action.setToolTip(trip["work_dir"])
+            action.triggered.connect(
+                lambda checked=False, at=trip["work_dir"]: self.open_trip(at)
+            )
+
+    def _open_trip_folder(self):
+        """For a trip that has never been opened on this machine.
+
+        The list only knows what this copy of the app has seen, and a trip
+        folder travels with the recordings, so a shared drive or a second Mac
+        needs a way in that does not depend on it.
+        """
+        from PyQt6.QtWidgets import QFileDialog
+
+        where = QFileDialog.getExistingDirectory(self, "Open a trip folder")
+        if where:
+            self.open_trip(where)
+
+    def open_trip(self, work_dir: str):
+        """Reopen a saved trip, wherever it had got to.
+
+        `WriteUp.resume` has always been able to do this and nothing could
+        reach it: it was only ever called straight after a fresh transcription,
+        so a trip closed part way through was finished or abandoned, with no
+        third option and a quarter of an hour of research stranded on disk.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        from src.podcastnotes import recents
+        from src.podcastnotes.pipeline import WriteUp
+        from src.podcastnotes.project import TripProject
+
+        if self._something_is_running():
+            return
+        try:
+            trip = TripProject.load(work_dir)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "That folder could not be opened",
+                f"There is no readable trip in {work_dir}.\n\n{e}",
+            )
+            return
+
+        # Derived the same way the run derived them, rather than spelled out
+        # here, so a change to the naming cannot leave reopening pointing at a
+        # file that stopped existing.
+        from src.utils.file_utils import generate_output_paths
+
+        audio = trip.combined_audio_path
+        _, _, json_path = generate_output_paths(audio)
+        payload = _read_json(json_path)
+        if not payload:
+            QMessageBox.information(
+                self, "Nothing to write up yet",
+                f"{trip.name} has no finished transcript in it, so there is "
+                f"nothing to reopen. Start it again from the recordings.",
+            )
+            return
+
+        self.trip = trip
+        self._kept = False
+        self.writeup = WriteUp.resume(
+            work_dir, payload,
+            boundaries=_read_json(trip.path_for(BOUNDARIES_FILENAME)),
+        )
+        self.writeup.description = trip.description or ""
+        self.writeup_view.set_audio(audio)
+        recents.remember(work_dir)
+        self.stack.setCurrentWidget(self.writeup_view)
+        self._resume_writeup()
+
+    # Where a reopened trip picks up. Not the same as the worker steps: two of
+    # the pipeline's stages are cheap enough to run inline, so reopening at
+    # either of them starts at the next one that is not.
+    RESUME_AT = {
+        "context": "context",
+        "correct": "speakers",
+        "attribute": "speakers",
+        "questions": "questions",
+        "write": "write",
+    }
+
+    def _resume_writeup(self):
+        """Pick the trip up wherever it stopped.
+
+        A finished one goes straight to its documents rather than being
+        rewritten, because the pair on disk is what the person came back for
+        and spending ten minutes and a Claude call to reproduce them would be
+        an odd way to say hello.
+        """
+        step = self.writeup.step.value
+        if step == "done" and not self.writeup.pending_write:
+            from src.podcastnotes.output import Documents
+
+            self.writeup_view.show_documents(
+                Documents(transcript=self.writeup.transcript,
+                          summary=self.writeup.summary),
+                notes=self.writeup.notes,
+            )
+            self.writeup_view.set_revisions(self.writeup.revisions_left)
+            self.writeup_view.show_impossible(self.writeup.impossible)
+            return
+        if step == "correct":
+            self.writeup.apply_corrections()
+        # `pending_write` means it stopped between merging a revision and
+        # rewriting, so the documents on disk are older than the map. Writing
+        # again is the whole point of coming back.
+        self._run_step("write" if step == "done" else self.RESUME_AT[step])
+
+    def _something_is_running(self) -> bool:
+        """Opening a second trip over a running one would leave the first
+        thread writing into a pipeline nothing is showing any more."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        busy = [w for w in (self.worker, self.writeup_worker)
+                if w is not None and w.isRunning()]
+        if not busy:
+            return False
+        QMessageBox.information(
+            self, "Something is already running",
+            "Wait for the trip in progress to finish, or stop it, then open "
+            "another one.",
+        )
+        return True
 
     def show_setup(self):
         """Open the checklist and run it.
@@ -311,6 +461,7 @@ class MainWindow(QMainWindow):
             self._logger.warning("No segment export, so there is nothing to write up.")
             return
 
+        from src.podcastnotes import recents
         from src.podcastnotes.pipeline import WriteUp
 
         self._kept = False
@@ -320,6 +471,7 @@ class MainWindow(QMainWindow):
         )
         self.writeup.description = getattr(self.trip, "description", "") or ""
         self.writeup_view.set_audio(getattr(outputs, "audio_path", ""))
+        recents.remember(outputs.work_dir)
         self.stack.setCurrentWidget(self.writeup_view)
         self._run_step("context")
 
