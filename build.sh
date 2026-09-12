@@ -25,7 +25,7 @@ fi
 
 # Build with PyInstaller
 echo "Building app bundle with PyInstaller (this may take several minutes)..."
-pyinstaller WhisperTranscriber.spec --noconfirm
+pyinstaller PodcastNotesWT.spec --noconfirm
 
 # Verify FFmpeg was bundled (PyInstaller puts it in Frameworks/bin/)
 if [ -f "dist/PodcastNotesWT.app/Contents/Frameworks/bin/ffmpeg" ]; then

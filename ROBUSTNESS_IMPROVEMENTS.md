@@ -1,4 +1,8 @@
-# Whisper Transcriber - Robustness Improvements
+# PodcastNotesWT: robustness improvements
+
+A record of ten changes made while the app was still called Whisper
+Transcriber. The log directory below still carries that name, because
+renaming it would orphan every log a user already has.
 
 All 10 improvements have been implemented.
 

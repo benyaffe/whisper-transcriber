@@ -1,5 +1,5 @@
 """
-Pytest configuration for Whisper Transcriber tests.
+Pytest configuration for PodcastNotesWT tests.
 """
 
 import sys
@@ -70,7 +70,9 @@ def scoped_settings(tmp_path, monkeypatch):
     """Redirect src.core.config at a throwaway ini file.
 
     Otherwise these tests read and write the developer's real preferences at
-    ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist, and
+    ~/Library/Preferences/com.whispertranscriber.WhisperTranscriber.plist, which
+    keeps the app's old name deliberately: changing it would orphan the settings
+    of everybody who already has it installed. Also
     a failure mid-test leaves the setting flipped.
 
     QSettings.setPath cannot be used for this: on macOS it has no effect on

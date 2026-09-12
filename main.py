@@ -113,6 +113,10 @@ def main():
     app = PodcastNotesApp(sys.argv)
     app.setApplicationName("PodcastNotesWT")
     theme.apply(app)
+    # The app's old name, kept on purpose. Qt derives the settings and
+    # preferences paths from this, so renaming it would silently orphan the
+    # Google project, region and HuggingFace token of everybody who already
+    # has it installed.
     app.setOrganizationName("WhisperTranscriber")
 
     # Ensure app quits when window is closed (prevent respawn)

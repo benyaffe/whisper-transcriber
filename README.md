@@ -1,86 +1,124 @@
-# Whisper Transcriber
+# PodcastNotesWT
 
-A macOS GUI app for transcribing audio/video files to VTT/TXT using faster-whisper.
+A macOS app that turns the voice notes from a work trip into a corrected transcript and a
+written summary, without anybody typing either.
 
-## Features
+You drop in the recordings, say in a sentence what the trip was, and leave. Roughly twenty
+minutes later there are two documents: a transcript with the speakers named and the
+misheard terms fixed, and a summary written for somebody who was not there. It stops and
+asks you three times along the way, for about a minute in total.
 
-- **Drag & Drop**: Drop files onto the app icon or dashboard
-- **URL Downloads**: Paste YouTube, Instagram, TikTok links
-- **Smart Quality**: Auto-upgrades model if quality is low
-- **Live Preview**: See transcription in real-time
-- **Batch Processing**: Queue multiple files
+The point of it is the correcting. A machine transcript of a real conversation is full of
+names and jargon the recogniser has never met: "Ridgelane Northgate" for Ridgeline Health Northgate
+Westvale, "Kestler" for a department chair called Kessler. The app looks those up in your
+company's own knowledge search, so the corrections come from documents rather than from a
+guess, and anything it could not settle is left visibly marked rather than quietly
+invented.
+
+## What it does, in order
+
+1. **Transcribes** every recording with faster-whisper and tells the voices apart with
+   pyannote.
+2. **Reads the background** for the trip: an agentic loop over your company's Glean index,
+   several levels deep, from the sentence you typed.
+3. **Corrects** the transcript by direct substitution, marking anything it is unsure of.
+4. **Names the speakers**, offering the people it found and asking rather than guessing
+   when a voice is genuinely ambiguous.
+5. **Asks you a few questions**, at most four at a time and three rounds, about the things
+   nothing could resolve. Skipping is always allowed and leaves the markers in place.
+6. **Writes** the transcript and the summary.
+7. **Takes corrections afterwards.** Say what is wrong in your own words on the finished
+   screen and it researches what you said, including looking up any name you supply, and
+   writes both documents again.
+8. **Publishes** by copying the Markdown and opening a blank Google Doc for you to paste
+   into.
 
 ## Requirements
 
-- macOS 10.15+
-- Python 3.10+
-- FFmpeg (`brew install ffmpeg`)
+- macOS 10.15 or later, on Apple silicon
+- Python 3.10 or later
+- FFmpeg (`brew install ffmpeg`), or let the app fetch its own
+- A Google Cloud project with Claude enabled on Vertex AI
+- Glean, for the background reading
+- A free HuggingFace account, for telling the voices apart
 
-## Installation
+Only the first three are needed to get a plain transcript. The app's Setup screen checks
+each one, says what is missing in a sentence, and offers the fix beside it.
+
+## Installing
 
 ```bash
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Run the app
 python main.py
 ```
 
-## Running the Tests
+## The tests
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                     # skips tests/manual/
+python -m pytest                       # skips tests/manual/
 python -m pytest -m "not integration"  # also skips tests needing network or a built app
 ```
 
-## Building the App Bundle
+Two conventions worth knowing before adding to them. Every guard is verified by mutating
+the source and confirming a test fails, rather than by asserting that coverage exists;
+clear `__pycache__` between mutation runs, because Python invalidates bytecode on
+whole-second mtime plus byte size and a same-length edit reverted inside a second leaves a
+poisoned `.pyc`. And no test may depend on the developer's machine: ambient credentials
+and modal dialogs are neutralised by autouse fixtures in `tests/conftest.py`, and a test
+that wants either opts in.
+
+## Building the app
 
 ```bash
-# Builds the .app with PyInstaller and packages it into a DMG.
-# Requires an existing venv with requirements.txt installed, plus create-dmg.
+# Builds the .app with PyInstaller and packages it into a DMG. Needs a venv with
+# requirements.txt installed, plus create-dmg.
 ./build.sh
-
-# App will be in dist/Whisper Transcriber.app
 ```
 
-The build is driven entirely by `WhisperTranscriber.spec`. The DMG is not code-signed or notarized,
-so first launch needs a right-click > Open to get past Gatekeeper.
+The result is `dist/PodcastNotesWT.app` and a DMG named from `VERSION`. The build is
+driven entirely by `PodcastNotesWT.spec`.
 
-## Usage
+**It is not signed or notarized**, so the first launch needs a right-click and Open to get
+past Gatekeeper. That is the single most likely thing to stop somebody you hand it to.
 
-1. **Local Files**: Drag audio/video files onto the window, or click to browse
-2. **URLs**: Paste a video URL and click "Add URL"
-3. **Monitor**: Watch progress and live transcript preview
-4. **Output**: VTT and TXT files are saved next to the source file
+## Telling the voices apart
 
-## Output Formats
+Uses pyannote.audio, which needs a free HuggingFace account:
 
-- **VTT**: WebVTT with timestamps (great for search/reference)
-- **TXT**: Clean prose without timestamps
-
-## Speaker Identification (Optional)
-
-Identifies different speakers in your audio using pyannote.audio. Requires a free HuggingFace account:
-
-1. Create an account at [huggingface.co](https://huggingface.co/join)
-2. Accept the license for all three required models:
+1. Create an account at [huggingface.co](https://huggingface.co/join).
+2. Accept the licence for all three models:
    - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
    - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
    - [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
-3. Create an access token at [Settings > Access Tokens](https://huggingface.co/settings/tokens) with **Read** permission
-4. Enter the token in the app's Settings dialog
+3. Create a token at [Settings > Access Tokens](https://huggingface.co/settings/tokens)
+   with **Read** permission.
+4. Paste it into the app's setup screen, which walks through all of this.
 
-The app derives this list at runtime from `REQUIRED_MODELS` in
-[`src/core/diarization.py`](src/core/diarization.py), which is the source of truth. This section is
-the one hand-maintained copy; update it if that constant changes.
+The app derives that list at runtime from `REQUIRED_MODELS` in
+[`src/core/diarization.py`](src/core/diarization.py), which is the source of truth. This
+section is the one hand-maintained copy; update it if that constant changes.
 
-## Model Selection
+Voices you have named before are remembered, so the same colleague across several trips is
+suggested rather than asked about again.
 
-Defaults to the `medium` model, chosen in the sidebar and fixed for the whole run. If confidence
-looks low after the first two minutes the app warns and suggests re-running with `large`, rather than
-switching models mid-transcription.
+## Models
+
+Transcription defaults to Whisper `medium`, chosen once and fixed for the whole run. If
+confidence looks low after the first two minutes the app says so and suggests re-running
+with `large`, rather than switching part way through.
+
+The write-up uses Claude Opus 5 through Vertex AI, in the `global` region by default.
+
+## Where things live
+
+- `src/core/` — transcription, diarization, audio. No Qt, no Claude.
+- `src/podcastnotes/` — the write-up pipeline: context, correction, questions, output,
+  revision. No Qt.
+- `src/ui/` — the screens, and `theme.py`, which is the one place the app decides what it
+  looks like.
+- `spike/` — scripts that render every screen to a PNG and drive the app end to end. Run
+  `spike/render_all.py` before calling any interface work finished; the screens have
+  produced several defects that a green suite did not.
