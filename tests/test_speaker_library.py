@@ -282,3 +282,46 @@ def test_an_empty_library_suggests_nothing_and_does_not_fail(tmp_path):
     suggestions = lib.suggest_names(_payload(), path=str(tmp_path / "s.db"))
 
     assert suggestions == {"Speaker 1": [], "Speaker 2": [], "Speaker 3": []}
+
+
+# --- seeing what is remembered ----------------------------------------------------
+
+
+def test_a_remembered_voice_can_be_listed_with_its_context(tmp_path):
+    """The count alone does not answer the only question somebody asks on this
+    screen, which is "is this the wrong one?". The trips it was heard on is
+    what tells them."""
+    with lib.Library(str(tmp_path / "v.db")) as library:
+        library.remember("Anya Petrov-Hale", [1.0, 0.0], trip="Ashford")
+        library.remember("Anya Petrov-Hale", [0.9, 0.1], trip="Cleveland")
+
+        entries = library.entries()
+
+    assert entries == [{
+        "name": "Anya Petrov-Hale", "samples": 2,
+        "last_heard": entries[0]["last_heard"],
+        "trips": ["Cleveland", "Ashford"],
+    }]
+    assert entries[0]["last_heard"], "no idea when it was last heard"
+
+
+def test_one_trip_heard_twice_is_listed_once(tmp_path):
+    """Three recordings from one trip is three samples and one trip, and a row
+    reading "Ashford, Ashford, Ashford" helps nobody."""
+    with lib.Library(str(tmp_path / "v.db")) as library:
+        library.remember("Marcus", [1.0, 0.0], trip="Ashford")
+        library.remember("Marcus", [0.9, 0.1], trip="Ashford")
+
+        assert library.entries()[0]["trips"] == ["Ashford"]
+
+
+def test_a_voice_remembered_with_no_trip_still_lists(tmp_path):
+    with lib.Library(str(tmp_path / "v.db")) as library:
+        library.remember("Marcus", [1.0, 0.0])
+
+        assert library.entries()[0]["trips"] == []
+
+
+def test_nothing_remembered_is_an_empty_list(tmp_path):
+    with lib.Library(str(tmp_path / "v.db")) as library:
+        assert library.entries() == []

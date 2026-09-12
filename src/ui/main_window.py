@@ -103,6 +103,8 @@ class MainWindow(QMainWindow):
         settings_action = app_menu.addAction("Accounts...")
         settings_action.setShortcut("Cmd+,")
         settings_action.triggered.connect(self._open_settings)
+        voices_action = app_menu.addAction("Remembered voices...")
+        voices_action.triggered.connect(self._open_voices)
 
         trips = self.menuBar().addMenu("Trips")
         self._recent_menu = trips.addMenu("Reopen")
@@ -110,6 +112,17 @@ class MainWindow(QMainWindow):
         open_action = trips.addAction("Open a trip folder...")
         open_action.setShortcut("Cmd+O")
         open_action.triggered.connect(self._open_trip_folder)
+
+    def _open_voices(self):
+        """See what the app has learned about people's voices, and undo it.
+
+        A name given in haste, or to the wrong row, is then suggested
+        confidently on every trip afterwards, and there was no way to see that
+        had happened let alone reverse it.
+        """
+        from src.ui.podcastnotes.voices_dialog import VoicesDialog
+
+        VoicesDialog(parent=self).exec()
 
     def _fill_recent_menu(self):
         """Rebuilt each time it opens, because the folders are somebody's own.

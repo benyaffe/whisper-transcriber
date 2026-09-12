@@ -191,6 +191,27 @@ class Library:
         ).fetchall()
         return [(name, count) for name, count in rows]
 
+    def entries(self) -> list:
+        """Everyone remembered, with enough context to decide about them.
+
+        The count alone does not answer the only question somebody asks here,
+        which is "is this the wrong one?". Which trips a voice was heard on,
+        and when it was last heard, is what tells them.
+        """
+        rows = self._db.execute(
+            "SELECT name, COUNT(*), MAX(recorded_at), GROUP_CONCAT(DISTINCT trip) "
+            "FROM voices GROUP BY name ORDER BY name"
+        ).fetchall()
+        return [
+            {
+                "name": name,
+                "samples": count,
+                "last_heard": last or "",
+                "trips": sorted(t for t in (trips or "").split(",") if t.strip()),
+            }
+            for name, count, last, trips in rows
+        ]
+
     def forget(self, name: str) -> int:
         """Remove every sample of one person. Returns how many were removed."""
         cursor = self._db.execute("DELETE FROM voices WHERE name = ?", ((name or "").strip(),))
