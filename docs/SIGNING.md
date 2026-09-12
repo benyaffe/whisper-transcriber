@@ -35,22 +35,25 @@ that; the certificate has to exist.
 It requires a **paid Apple Developer Program membership**, currently $99 a
 year, and only the account holder or an admin on that team can create one.
 
-1. Sign in at [developer.apple.com/account](https://developer.apple.com/account).
-2. Look at the top of the page for the team name and your role.
-   - If it says **Account Holder** or **Admin**, you can do this yourself.
-     Continue to step 3.
-   - If it says **Member** or **Developer**, you cannot, and this is an ask for
-     whoever administers the company's Apple Developer account. There is no way
-     round it and no point trying.
-   - If there is no membership at all, that is the first thing to buy.
-3. Go to **Certificates, IDs & Profiles > Certificates** and press the **+**.
-4. Choose **Developer ID Application**. If that option is missing or greyed
+1. Sign in at [developer.apple.com/account](https://developer.apple.com/account)
+   and open **Membership details**.
+2. Look at **Enrolled as**.
+   - **Individual** means the team is one person and that person is you, so you
+     are the account holder and can do all of this yourself. Continue to step 3.
+   - **Organization** means it depends on your role. Account Holder or Admin
+     can continue; Member or Developer cannot, and it becomes an ask for
+     whoever administers the account.
+   - No membership at all is the first thing to buy.
+3. Note the **Team ID** on the same page. It is ten characters and you will
+   need it for notarization below.
+4. Go to **Certificates, IDs & Profiles > Certificates** and press the **+**.
+5. Choose **Developer ID Application**. If that option is missing or greyed
    out, your role does not allow it; go back to step 2.
-5. Follow the prompts to upload a certificate request. Keychain Access makes
+6. Follow the prompts to upload a certificate request. Keychain Access makes
    one under **Certificate Assistant > Request a Certificate From a Certificate
    Authority**, saved to disk.
-6. Download the certificate it issues and double-click it to install.
-7. Confirm it worked:
+7. Download the certificate it issues and double-click it to install.
+8. Confirm it worked:
 
 ```bash
 security find-identity -v -p codesigning | grep "Developer ID Application"
